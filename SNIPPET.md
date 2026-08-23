@@ -19,6 +19,8 @@ or reviewing tests:
   (`--stdout` to preview, `--force` to overwrite). Don't rename or
   restructure the generated blocks and tests — the names encode the tree.
 - **Verify before finishing.** Run `btt check` before ending any task that
-  touched tests; it must exit clean. Fix mismatches by updating the tree (if
+  touched tests; it must exit clean. While iterating, scope it to what you
+  touched — it accepts `.tree` files and directories:
+  `btt check src/map.tree src/util/`. Fix mismatches by updating the tree (if
   behavior legitimately changed) or the tests — never by deleting spec lines
   just to silence the check.

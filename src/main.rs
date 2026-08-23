@@ -406,18 +406,22 @@ fn cmd_scaffold(
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("test");
-    let rendered = scaffold::render(&pack, &expected, stem)?;
-
-    if to_stdout {
-        print!("{rendered}");
-        return Ok(ExitCode::SUCCESS);
-    }
     let out_path = output.unwrap_or_else(|| {
         tree_path
             .parent()
             .unwrap_or(Path::new("."))
             .join(pack.manifest.scaffold.output.replace("{stem}", stem))
     });
+    // The output's location decides the file's shape where a language has
+    // more than one (Rust: a `tests/` integration crate is all test code,
+    // while anywhere else the template wraps in `#[cfg(test)] mod tests`).
+    let in_tests_dir = out_path.components().any(|c| c.as_os_str() == "tests");
+    let rendered = scaffold::render(&pack, &expected, stem, in_tests_dir)?;
+
+    if to_stdout {
+        print!("{rendered}");
+        return Ok(ExitCode::SUCCESS);
+    }
     if out_path.exists() && !force {
         bail!(
             "{} already exists (use --force to overwrite, or --stdout to preview)",

@@ -45,6 +45,19 @@ pub enum Error {
         source: Box<toml::de::Error>,
     },
 
+    /// A pack manifest referenced a path that could escape its directory.
+    #[error(
+        "pack `{pack}`: {field} `{value}` must be a relative path with no `..` components"
+    )]
+    UnsafePath {
+        /// The pack with the unsafe reference.
+        pack: String,
+        /// Which manifest field held it.
+        field: &'static str,
+        /// The offending value.
+        value: String,
+    },
+
     /// A file referenced by a pack manifest is missing or not UTF-8.
     #[error("pack `{pack}`: missing or invalid file `{file}`")]
     PackFile {

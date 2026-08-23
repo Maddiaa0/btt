@@ -43,10 +43,10 @@ pub struct PackMeta {
 /// How files are routed to this pack.
 #[derive(Debug, Deserialize)]
 pub struct Detect {
-    /// File extensions this pack's language uses, e.g. `["rs"]`.
-    pub extensions: Vec<String>,
     /// Candidate test-file names for a tree file, tried in order.
     /// `{stem}` is the tree file's stem: `map.tree` -> `map`.
+    /// These patterns are the single source of routing truth — both for
+    /// resolving a tree's target and (in reverse) for uncovered detection.
     pub targets: Vec<String>,
 }
 
@@ -176,12 +176,6 @@ impl Pack {
     #[must_use]
     pub fn name(&self) -> &str {
         &self.manifest.pack.name
-    }
-
-    /// Whether this pack's language uses the given file extension.
-    #[must_use]
-    pub fn matches_extension(&self, ext: &str) -> bool {
-        self.manifest.detect.extensions.iter().any(|e| e == ext)
     }
 }
 

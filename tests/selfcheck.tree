@@ -1,0 +1,3 @@
+btt selfcheck
+└── when checking btt against its own trees
+    └── it finds no drift

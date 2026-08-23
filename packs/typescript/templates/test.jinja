@@ -1,0 +1,15 @@
+import { describe, it } from "vitest"; // adjust for your runner (jest/bun have globals)
+
+{% for ev in events -%}
+{% if ev.kind == "open" -%}
+{{ ev.indent }}describe("{{ ev.name }}", () => {
+{% elif ev.kind == "close" -%}
+{{ ev.indent }}});
+
+{% elif ev.kind == "test" -%}
+{{ ev.indent }}it("{{ ev.name }}", () => {
+{{ ev.indent }}  // TODO: {{ ev.text }}
+{{ ev.indent }}});
+
+{% endif -%}
+{% endfor -%}

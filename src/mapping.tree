@@ -1,0 +1,9 @@
+mapping rules
+├── when applying snake case
+│   ├── it joins words with underscores
+│   └── it drops punctuation
+├── when a strip prefix is configured
+│   ├── it removes it case insensitively
+│   └── it leaves other text untouched
+└── when applying pascal case
+    └── it capitalizes each word

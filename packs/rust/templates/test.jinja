@@ -1,0 +1,16 @@
+{% for ev in events -%}
+{% if ev.kind == "open" -%}
+{{ ev.indent }}mod {{ ev.name }} {
+{{ ev.indent }}    use super::*;
+
+{% elif ev.kind == "close" -%}
+{{ ev.indent }}}
+
+{% elif ev.kind == "test" -%}
+{{ ev.indent }}#[test]
+{{ ev.indent }}fn {{ ev.name }}() {
+{{ ev.indent }}    todo!("{{ ev.text }}");
+{{ ev.indent }}}
+
+{% endif -%}
+{% endfor -%}

@@ -1,0 +1,10 @@
+checker
+├── when the file matches the spec
+│   ├── it reports no findings
+│   └── it sees through wrapper blocks
+├── when a test is missing
+│   └── it reports it with the spec line
+├── when the file has extra tests
+│   └── it reports each extra node
+└── when sibling order differs
+    └── it reports an order finding

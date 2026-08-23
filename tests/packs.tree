@@ -1,0 +1,8 @@
+language packs
+├── when checking a matching typescript file
+│   └── it reports no findings
+├── when checking a drifted typescript file
+│   └── it reports the missing and extra test
+└── when scaffolding from a tree
+    ├── it renders rust modules and test functions
+    └── it renders nested describe blocks

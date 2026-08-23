@@ -1,0 +1,8 @@
+# btt — branch tree testing (this repo dogfoods itself)
+
+[project]
+packs = ["rust"]
+
+[check]
+extra = "warn"
+order = "warn"

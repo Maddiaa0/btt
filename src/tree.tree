@@ -1,0 +1,12 @@
+tree parser
+├── when parsing a basic tree
+│   ├── it resolves the root name
+│   ├── it nests children by indentation
+│   └── it records line numbers
+├── when the file has multiple trees
+│   └── it splits them on blank lines
+└── when the tree is malformed
+    ├── it rejects children under it nodes
+    ├── it rejects unknown node keywords
+    ├── it rejects depth jumps
+    └── it rejects empty files

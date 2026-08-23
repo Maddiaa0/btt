@@ -128,13 +128,13 @@ fn cmd_check(
 
     let run = || {
         let outcomes = runner::check_all(&packs, &tree_files, cfg.check);
-        let uncovered = match cfg.check.uncovered {
-            Level::Ignore => Vec::new(),
-            Level::Error | Level::Warn => runner::find_uncovered(&packs, &search),
+        let scan = match cfg.check.uncovered {
+            Level::Ignore => runner::UncoveredScan::default(),
+            Level::Error | Level::Warn => runner::find_uncovered(&packs, &search, &tree_files),
         };
-        (outcomes, uncovered)
+        (outcomes, scan)
     };
-    let (outcomes, uncovered) = match jobs {
+    let (outcomes, scan) = match jobs {
         Some(jobs) => rayon::ThreadPoolBuilder::new()
             .num_threads(jobs.get())
             .build()
@@ -144,7 +144,7 @@ fn cmd_check(
         None => run(),
     };
 
-    if tree_files.is_empty() && uncovered.is_empty() {
+    if tree_files.is_empty() && scan.uncovered.is_empty() && scan.failed.is_empty() {
         println!("no .tree files found");
         return Ok(ExitCode::SUCCESS);
     }
@@ -179,29 +179,17 @@ fn cmd_check(
             println!("{line}");
         }
     }
-    for u in &uncovered {
-        let rel = u.path.strip_prefix(root).unwrap_or(&u.path);
-        let sev = if cfg.check.uncovered == Level::Error {
-            errors += 1;
-            "✗"
-        } else {
-            warnings += 1;
-            "!"
-        };
-        println!(
-            "{sev} {} — {} test(s), not covered by any .tree",
-            rel.display(),
-            u.tests
-        );
-    }
-    if !uncovered.is_empty() {
-        println!("    hint: write a .tree next to each file mirroring its tests");
+    let scan_report = render_scan(&scan, cfg.check.uncovered, root);
+    errors += scan_report.errors;
+    warnings += scan_report.warnings;
+    for line in &scan_report.lines {
+        println!("{line}");
     }
     // Only claim an uncovered count when the scan actually ran.
     let uncovered_part = if cfg.check.uncovered == Level::Ignore {
         String::new()
     } else {
-        format!("{} uncovered, ", uncovered.len())
+        format!("{} uncovered, ", scan.uncovered.len())
     };
     println!(
         "\n{} tree file(s), {uncovered_part}{errors} error(s), {warnings} warning(s)",
@@ -209,9 +197,10 @@ fn cmd_check(
     );
     // Spec drift exits 1; a file that could not be checked at all is a tool
     // failure and exits 2, like every other tool error.
-    let failed = outcomes
-        .iter()
-        .any(|o| matches!(o.result, runner::FileResult::Failed(_)));
+    let failed = !scan.failed.is_empty()
+        || outcomes
+            .iter()
+            .any(|o| matches!(o.result, runner::FileResult::Failed(_)));
     Ok(if failed {
         ExitCode::from(2)
     } else if errors > 0 {
@@ -219,6 +208,52 @@ fn cmd_check(
     } else {
         ExitCode::SUCCESS
     })
+}
+
+/// Render the uncovered scan: files needing specs at their configured
+/// severity, then scan failures. Unverifiable coverage is a tool failure —
+/// strict projects must not go green because extraction broke — so
+/// failures are counted in full and printed capped.
+fn render_scan(scan: &runner::UncoveredScan, level: Level, root: &Path) -> FileReport {
+    let mut report = FileReport {
+        lines: Vec::new(),
+        errors: 0,
+        warnings: 0,
+    };
+    for u in &scan.uncovered {
+        let rel = u.path.strip_prefix(root).unwrap_or(&u.path);
+        let sev = if level == Level::Error {
+            report.errors += 1;
+            "✗"
+        } else {
+            report.warnings += 1;
+            "!"
+        };
+        report.lines.push(format!(
+            "{sev} {} — {} test(s), not covered by any .tree",
+            rel.display(),
+            u.tests
+        ));
+    }
+    if !scan.uncovered.is_empty() {
+        report
+            .lines
+            .push("    hint: write a .tree next to each file mirroring its tests".to_string());
+    }
+    report.errors += scan.failed.len();
+    for (path, e) in scan.failed.iter().take(5) {
+        let rel = path.strip_prefix(root).unwrap_or(path);
+        report
+            .lines
+            .push(format!("✗ {} — coverage scan failed: {e}", rel.display()));
+    }
+    if scan.failed.len() > 5 {
+        report.lines.push(format!(
+            "    …and {} more files could not be scanned",
+            scan.failed.len() - 5
+        ));
+    }
+    report
 }
 
 fn render(outcome: &runner::FileOutcome, root: &Path) -> FileReport {

@@ -94,10 +94,24 @@ packs = ["rust"]        # routing-priority order
 [check]
 extra = "warn"          # tests in the file but not the tree: error|warn|ignore
 order = "warn"          # sibling order drift: error|warn|ignore
+uncovered = "warn"      # test-bearing files with no .tree spec: error|warn|ignore
 ```
 
 Missing tests are always errors. `btt check` exits non-zero on errors — wire
 it into CI or a pre-commit hook.
+
+`uncovered` is what makes partial adoption honest: `check` reports not just
+"the covered files match" but "these files have tests and no spec at all"
+(it reverse-matches each pack's target patterns and extracts, so a repo with
+zero `.tree` files reports every test file instead of a hollow pass). Keep
+it at `warn` while adopting; in CI, ratchet everything to strict:
+
+```toml
+[check]
+extra = "error"
+order = "error"
+uncovered = "error"
+```
 
 ## Commands
 

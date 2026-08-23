@@ -6,3 +6,5 @@ packs = ["rust"]
 [check]
 extra = "warn"
 order = "warn"
+# Every test-bearing file must have a .tree spec (dogfooding the ratchet).
+uncovered = "error"

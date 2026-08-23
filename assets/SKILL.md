@@ -56,6 +56,24 @@ Configured per language by packs (see `btt packs`; project config in
   `describe("HashMap", …)`; branches are nested `describe`s with the
   condition text verbatim; leaves are `it("returns the value", …)`.
 
+## Adopting btt in an existing codebase
+
+`btt check` reports **uncovered** files: test-bearing sources no `.tree`
+spec routes to. To migrate one, read its tests and write the `.tree` beside
+it yourself (there is deliberately no automatic reverse-generation):
+
+1. Mirror the existing structure: each nesting block becomes a `when`/
+   `given` branch, each test an `it` leaf (drop naming-rule prefixes in
+   reverse — `returns_none` → `it returns none`).
+2. Flat suites (many tests, no nesting) become a root with `it` leaves.
+   Where test names encode conditions (`expired_token_returns_unauthorized`),
+   prefer restructuring into a `when the token is expired` branch with the
+   outcome as its leaf — renaming the code to match. That restructuring is
+   the point of the technique, not overhead.
+3. Verify with `btt check` after each file; finish when nothing is
+   uncovered. Projects typically set `uncovered = "warn"` while migrating
+   and `"error"` in CI once done.
+
 ## Rules of thumb
 
 - New behavior → new branch in the tree, then a new test. Never add a test

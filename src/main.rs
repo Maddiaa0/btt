@@ -107,20 +107,29 @@ fn cmd_check(
     let packs = load_packs(root, cfg)?;
     let search = if paths.is_empty() { vec![root.to_path_buf()] } else { paths.to_vec() };
     let tree_files = runner::find_tree_files(&search);
-    if tree_files.is_empty() {
-        println!("no .tree files found");
-        return Ok(ExitCode::SUCCESS);
-    }
 
-    let outcomes = match jobs {
+    let run = || {
+        let outcomes = runner::check_all(&packs, &tree_files, cfg.check);
+        let uncovered = match cfg.check.uncovered {
+            Level::Ignore => Vec::new(),
+            Level::Error | Level::Warn => runner::find_uncovered(&packs, &search),
+        };
+        (outcomes, uncovered)
+    };
+    let (outcomes, uncovered) = match jobs {
         Some(jobs) => rayon::ThreadPoolBuilder::new()
             .num_threads(jobs.get())
             .build()
             .context("building thread pool")?
-            .install(|| runner::check_all(&packs, &tree_files, cfg.check)),
+            .install(run),
         // No -j: the lazily-built global rayon pool (one thread per core).
-        None => runner::check_all(&packs, &tree_files, cfg.check),
+        None => run(),
     };
+
+    if tree_files.is_empty() && uncovered.is_empty() {
+        println!("no .tree files found");
+        return Ok(ExitCode::SUCCESS);
+    }
 
     let (mut errors, mut warnings) = (0usize, 0usize);
     for outcome in &outcomes {
@@ -131,8 +140,28 @@ fn cmd_check(
             println!("{line}");
         }
     }
+    for u in &uncovered {
+        let rel = u.path.strip_prefix(root).unwrap_or(&u.path);
+        let sev = if cfg.check.uncovered == Level::Error {
+            errors += 1;
+            "✗"
+        } else {
+            warnings += 1;
+            "!"
+        };
+        println!("{sev} {} — {} test(s), not covered by any .tree", rel.display(), u.tests);
+    }
+    if !uncovered.is_empty() {
+        println!("    hint: write a .tree next to each file mirroring its tests");
+    }
+    // Only claim an uncovered count when the scan actually ran.
+    let uncovered_part = if cfg.check.uncovered == Level::Ignore {
+        String::new()
+    } else {
+        format!("{} uncovered, ", uncovered.len())
+    };
     println!(
-        "\n{} tree file(s), {errors} error(s), {warnings} warning(s)",
+        "\n{} tree file(s), {uncovered_part}{errors} error(s), {warnings} warning(s)",
         tree_files.len()
     );
     // Spec drift exits 1; a file that could not be checked at all is a tool
@@ -285,6 +314,9 @@ packs = ["rust"]
 extra = "warn"
 # Severity of sibling order differing between tree and file: error | warn | ignore
 order = "warn"
+# Severity of test-bearing files with no .tree spec: error | warn | ignore
+# (warn while adopting; set to "error" in CI once every file has a tree)
+uncovered = "warn"
 "#;
 
 fn cmd_init(root: &Path, skill: bool) -> Result<ExitCode> {
@@ -299,8 +331,12 @@ fn cmd_init(root: &Path, skill: bool) -> Result<ExitCode> {
         let skill_dir = root.join(".claude/skills/btt");
         std::fs::create_dir_all(&skill_dir)?;
         let skill_path = skill_dir.join("SKILL.md");
-        std::fs::write(&skill_path, include_str!("../assets/SKILL.md"))?;
-        println!("wrote {}", skill_path.display());
+        if skill_path.exists() {
+            println!("{} already exists, leaving it untouched", skill_path.display());
+        } else {
+            std::fs::write(&skill_path, include_str!("../assets/SKILL.md"))?;
+            println!("wrote {}", skill_path.display());
+        }
     } else {
         println!(
             "tip: `btt init --skill` writes a Claude skill teaching agents the tree-first workflow"

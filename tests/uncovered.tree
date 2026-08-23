@@ -1,0 +1,7 @@
+uncovered detection
+├── when a source file has tests but no tree
+│   └── it is reported with its test count
+├── when a tree spec exists next to the file
+│   └── it is not reported
+└── when a source file has no tests
+    └── it is not reported

@@ -5,6 +5,8 @@ use btt::extract::ActualKind;
 use btt::runner::{self, Target};
 use btt::{check, pack, scaffold, tree};
 use clap::{Parser, Subcommand};
+use rayon::prelude::*;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -21,6 +23,9 @@ enum Command {
     Check {
         /// Tree files or directories to search (default: project root).
         paths: Vec<PathBuf>,
+        /// Number of files to check in parallel (default: one per core).
+        #[arg(short, long)]
+        jobs: Option<NonZeroUsize>,
     },
     /// Generate a test-file skeleton from a .tree spec.
     Scaffold {
@@ -66,7 +71,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
     let cfg = config::load(&root)?;
 
     match cli.command {
-        Command::Check { paths } => cmd_check(&paths, &root, &cfg),
+        Command::Check { paths, jobs } => cmd_check(&paths, jobs, &root, &cfg),
         Command::Scaffold { tree, pack, output, force, stdout } => {
             cmd_scaffold(&tree, pack, output, force, stdout, &root, &cfg)
         }
@@ -86,7 +91,20 @@ fn load_packs(root: &Path, cfg: &config::ProjectConfig) -> Result<Vec<pack::Pack
     Ok(names.iter().map(|n| pack::load(n, root)).collect::<btt::Result<_>>()?)
 }
 
-fn cmd_check(paths: &[PathBuf], root: &Path, cfg: &config::ProjectConfig) -> Result<ExitCode> {
+/// The rendered outcome of checking one tree file, assembled off-thread so
+/// parallel runs print deterministically, in file order.
+struct FileReport {
+    lines: Vec<String>,
+    errors: usize,
+    warnings: usize,
+}
+
+fn cmd_check(
+    paths: &[PathBuf],
+    jobs: Option<NonZeroUsize>,
+    root: &Path,
+    cfg: &config::ProjectConfig,
+) -> Result<ExitCode> {
     let packs = load_packs(root, cfg)?;
     let search = if paths.is_empty() { vec![root.to_path_buf()] } else { paths.to_vec() };
     let tree_files = runner::find_tree_files(&search);
@@ -95,38 +113,23 @@ fn cmd_check(paths: &[PathBuf], root: &Path, cfg: &config::ProjectConfig) -> Res
         return Ok(ExitCode::SUCCESS);
     }
 
-    let mut errors = 0usize;
-    let mut warnings = 0usize;
-    for tree_path in &tree_files {
-        let rel = tree_path.strip_prefix(root).unwrap_or(tree_path);
-        match runner::resolve_target(tree_path, &packs) {
-            Target::NotFound { candidates } => {
-                errors += 1;
-                println!("✗ {} — no matching test file", rel.display());
-                for c in candidates.iter().take(4) {
-                    println!("    tried {}", c.display());
-                }
-                println!("    hint: btt scaffold {}", rel.display());
-            }
-            Target::Found { pack, path } => {
-                let reported = runner::check_file(pack, tree_path, &path, &cfg.check)?;
-                if reported.is_empty() {
-                    let shown = path.file_name().unwrap_or(path.as_os_str());
-                    println!("✓ {} ({})", rel.display(), shown.to_string_lossy());
-                    continue;
-                }
-                println!("✗ {} → {}", rel.display(), path.display());
-                for r in &reported {
-                    let sev = if r.level == Level::Error {
-                        errors += 1;
-                        "error"
-                    } else {
-                        warnings += 1;
-                        "warn "
-                    };
-                    println!("    {sev} {}", describe(&r.finding, rel, &path));
-                }
-            }
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(jobs.map_or(0, NonZeroUsize::get))
+        .build()
+        .context("building thread pool")?;
+    let reports: Vec<FileReport> = pool.install(|| {
+        tree_files
+            .par_iter()
+            .map(|tree_path| check_one(tree_path, root, &packs, cfg.check))
+            .collect()
+    });
+
+    let (mut errors, mut warnings) = (0usize, 0usize);
+    for report in &reports {
+        errors += report.errors;
+        warnings += report.warnings;
+        for line in &report.lines {
+            println!("{line}");
         }
     }
     println!(
@@ -134,6 +137,53 @@ fn cmd_check(paths: &[PathBuf], root: &Path, cfg: &config::ProjectConfig) -> Res
         tree_files.len()
     );
     Ok(if errors > 0 { ExitCode::FAILURE } else { ExitCode::SUCCESS })
+}
+
+fn check_one(
+    tree_path: &Path,
+    root: &Path,
+    packs: &[pack::Pack],
+    cfg: config::CheckConfig,
+) -> FileReport {
+    let rel = tree_path.strip_prefix(root).unwrap_or(tree_path);
+    let mut report = FileReport { lines: Vec::new(), errors: 0, warnings: 0 };
+    match runner::resolve_target(tree_path, packs) {
+        Target::NotFound { candidates } => {
+            report.errors += 1;
+            report.lines.push(format!("✗ {} — no matching test file", rel.display()));
+            for c in candidates.iter().take(4) {
+                report.lines.push(format!("    tried {}", c.display()));
+            }
+            report.lines.push(format!("    hint: btt scaffold {}", rel.display()));
+        }
+        Target::Found { pack, path } => match runner::check_file(pack, tree_path, &path, &cfg) {
+            // A broken file reports and counts as an error, but never
+            // aborts the rest of the run.
+            Err(e) => {
+                report.errors += 1;
+                report.lines.push(format!("✗ {}", rel.display()));
+                report.lines.push(format!("    error {e}"));
+            }
+            Ok(reported) if reported.is_empty() => {
+                let shown = path.file_name().unwrap_or(path.as_os_str());
+                report.lines.push(format!("✓ {} ({})", rel.display(), shown.to_string_lossy()));
+            }
+            Ok(reported) => {
+                report.lines.push(format!("✗ {} → {}", rel.display(), path.display()));
+                for r in &reported {
+                    let sev = if r.level == Level::Error {
+                        report.errors += 1;
+                        "error"
+                    } else {
+                        report.warnings += 1;
+                        "warn "
+                    };
+                    report.lines.push(format!("    {sev} {}", describe(&r.finding, rel, &path)));
+                }
+            }
+        },
+    }
+    report
 }
 
 fn describe(finding: &Finding, tree_rel: &Path, target: &Path) -> String {

@@ -78,10 +78,7 @@ struct Capture {
 /// Fails if the pack's grammar is unavailable, its query does not compile or
 /// lacks the required captures, or tree-sitter cannot parse the source.
 pub fn extract(pack: &Pack, target: &Path, source: &str) -> Result<Vec<ActualNode>> {
-    let (mut parser, language) = configure_parser(pack, target)?;
-    let tree = parser
-        .parse(source, None)
-        .ok_or_else(|| Error::SourceParse { path: target.to_path_buf() })?;
+    let (tree, language) = parse_source(pack, target, source)?;
 
     let query = Query::new(&language, &pack.query).map_err(|source| Error::Query {
         pack: pack.name().to_string(),
@@ -142,52 +139,97 @@ pub fn extract(pack: &Pack, target: &Path, source: &str) -> Result<Vec<ActualNod
     Ok(ActualNode::prune_empty_blocks(top))
 }
 
-/// Build a parser for the pack's grammar. For a WASM grammar the parser
-/// carries the sandbox store the language was instantiated in, so both are
-/// returned together and must stay alive for the whole extraction.
-fn configure_parser(pack: &Pack, target: &Path) -> Result<(Parser, tree_sitter::Language)> {
-    let mut parser = Parser::new();
-    let language = match pack::grammar_for(pack, target)? {
-        pack::Grammar::Native(language) => language,
+/// Parse a source file with the pack's grammar, returning the syntax tree
+/// and the language (needed to compile the pack's query).
+fn parse_source(
+    pack: &Pack,
+    target: &Path,
+    source: &str,
+) -> Result<(tree_sitter::Tree, tree_sitter::Language)> {
+    match pack::grammar_for(pack, target)? {
+        pack::Grammar::Native(language) => {
+            let mut parser = Parser::new();
+            parser.set_language(&language)?;
+            let tree = parser
+                .parse(source, None)
+                .ok_or_else(|| Error::SourceParse { path: target.to_path_buf() })?;
+            Ok((tree, language))
+        }
         pack::Grammar::Wasm { symbol, bytes } => {
             #[cfg(feature = "wasm")]
             {
-                wasm_language(&mut parser, pack, &symbol, bytes)?
+                wasm::parse(pack, &symbol, bytes, target, source)
             }
             #[cfg(not(feature = "wasm"))]
             {
-                let _ = (symbol, bytes);
-                return Err(Error::WasmUnsupported { pack: pack.name().to_string() });
+                let _ = (symbol, bytes, source);
+                Err(Error::WasmUnsupported { pack: pack.name().to_string() })
             }
         }
-    };
-    parser.set_language(&language)?;
-    Ok((parser, language))
+    }
 }
 
-/// Instantiate a grammar module inside a sandboxed wasmtime store (no WASI:
-/// the grammar can only compute over the bytes we feed it) and attach the
-/// store to the parser.
+/// Sandboxed grammar support (Zed-style): grammars are instantiated in a
+/// wasmtime store with no WASI, so they can only compute over the bytes we
+/// feed them. Each thread keeps one parser whose store persists across
+/// files, plus a language cache — so a grammar is compiled once per thread,
+/// and every subsequent file on that thread pays only `set_language` +
+/// parse. The wasmtime engine is shared process-wide.
 #[cfg(feature = "wasm")]
-fn wasm_language(
-    parser: &mut Parser,
-    pack: &Pack,
-    symbol: &str,
-    bytes: &[u8],
-) -> Result<tree_sitter::Language> {
+mod wasm {
+    use super::{Error, Pack, Parser, Result};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::path::Path;
     use std::sync::OnceLock;
     use tree_sitter::wasmtime::Engine;
+    use tree_sitter::{Language, Tree, WasmStore};
 
-    static ENGINE: OnceLock<Engine> = OnceLock::new();
-    let engine = ENGINE.get_or_init(Engine::default);
-    let err = |e: &dyn std::fmt::Display| Error::WasmGrammar {
-        pack: pack.name().to_string(),
-        message: e.to_string(),
-    };
-    let mut store = tree_sitter::WasmStore::new(engine).map_err(|e| err(&e))?;
-    let language = store.load_language(symbol, bytes).map_err(|e| err(&e))?;
-    parser.set_wasm_store(store).map_err(|e| err(&e))?;
-    Ok(language)
+    struct ThreadState {
+        parser: Parser,
+        /// Compiled languages by export symbol. Assumes one grammar per
+        /// symbol within a run (two packs exporting the same symbol with
+        /// different bytes would collide — the store dedups by name).
+        languages: HashMap<String, Language>,
+    }
+
+    thread_local! {
+        static STATE: RefCell<Option<ThreadState>> = const { RefCell::new(None) };
+    }
+
+    fn engine() -> &'static Engine {
+        static ENGINE: OnceLock<Engine> = OnceLock::new();
+        ENGINE.get_or_init(Engine::default)
+    }
+
+    pub fn parse(pack: &Pack, symbol: &str, bytes: &[u8], target: &Path, source: &str) -> Result<(Tree, Language)> {
+        let err = |e: String| Error::WasmGrammar { pack: pack.name().to_string(), message: e };
+        STATE.with_borrow_mut(|slot| {
+            let state = match slot {
+                Some(state) => state,
+                None => slot.insert(ThreadState { parser: Parser::new(), languages: HashMap::new() }),
+            };
+            if !state.languages.contains_key(symbol) {
+                // Loading needs the store back from the parser (or a fresh
+                // one on this thread's first wasm parse).
+                let mut store = match state.parser.take_wasm_store() {
+                    Some(store) => store,
+                    None => WasmStore::new(engine()).map_err(|e| err(e.to_string()))?,
+                };
+                let language =
+                    store.load_language(symbol, bytes).map_err(|e| err(e.to_string()))?;
+                state.parser.set_wasm_store(store).map_err(|e| err(e.to_string()))?;
+                state.languages.insert(symbol.to_string(), language);
+            }
+            let language = state.languages[symbol].clone();
+            state.parser.set_language(&language)?;
+            let tree = state
+                .parser
+                .parse(source, None)
+                .ok_or_else(|| Error::SourceParse { path: target.to_path_buf() })?;
+            Ok((tree, language))
+        })
+    }
 }
 
 fn build_nodes(captures: &[Capture], i: &mut usize, parent_end: usize) -> Vec<ActualNode> {

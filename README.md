@@ -103,7 +103,7 @@ it into CI or a pre-commit hook.
 
 | command | |
 |---|---|
-| `btt check [paths]` | diff every `.tree` against its test file |
+| `btt check [paths] [-j N]` | diff every `.tree` against its test file (parallel; `-j` caps threads) |
 | `btt scaffold <tree>` | generate a skeleton (`--stdout`, `--force`, `--pack`) |
 | `btt packs` | list packs and where they resolve from |
 | `btt init [--skill]` | write `btt.toml` (+ Claude skill for agents) |

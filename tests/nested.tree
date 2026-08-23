@@ -1,0 +1,5 @@
+nested configs
+└── when checking a monorepo from the root
+    ├── it routes each subtree with its own packs
+    ├── it applies the nested check severities
+    └── it applies the nested uncovered severity

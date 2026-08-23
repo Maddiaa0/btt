@@ -67,17 +67,16 @@ fn main() -> ExitCode {
 fn run(cli: Cli) -> Result<ExitCode> {
     let cwd = std::env::current_dir().context("getting cwd")?;
     let root = config::find_project_root(&cwd);
-    let cfg = config::load(&root)?;
 
     match cli.command {
-        Command::Check { paths, jobs } => cmd_check(&paths, jobs, &root, &cfg),
+        Command::Check { paths, jobs } => cmd_check(&paths, jobs, &root),
         Command::Scaffold {
             tree,
             pack,
             output,
             force,
             stdout,
-        } => cmd_scaffold(&tree, pack, output, force, stdout, &root, &cfg),
+        } => cmd_scaffold(&tree, pack, output, force, stdout, &root),
         Command::Packs => Ok(cmd_packs(&root)),
         Command::Init { skill } => cmd_init(&root, skill),
     }
@@ -131,13 +130,61 @@ struct FileReport {
     warnings: usize,
 }
 
-fn cmd_check(
-    paths: &[PathBuf],
-    jobs: Option<NonZeroUsize>,
-    root: &Path,
-    cfg: &config::ProjectConfig,
-) -> Result<ExitCode> {
-    let packs = load_packs(root, cfg)?;
+/// Config and packs governing one subtree (the reach of one `btt.toml`).
+struct Subtree {
+    cfg: config::ProjectConfig,
+    packs: Vec<pack::Pack>,
+}
+
+/// Find every config root in the requested search area. Tree-bearing roots
+/// are included explicitly so a single-file invocation still resolves its
+/// ancestor config; walking also finds config-only subtrees whose uncovered
+/// source files need their own packs and severity.
+fn subtree_roots(search: &[PathBuf], tree_files: &[PathBuf], root: &Path) -> Result<Vec<PathBuf>> {
+    let mut roots = std::collections::BTreeSet::from([root.to_path_buf()]);
+    roots.extend(
+        tree_files
+            .iter()
+            .map(|tree| config::governing_root(tree, root)),
+    );
+
+    for path in search {
+        let config_start = if path.is_dir() {
+            path.as_path()
+        } else {
+            path.parent().unwrap_or(Path::new("."))
+        };
+        let config_start = std::path::absolute(config_start)
+            .with_context(|| format!("resolving {}", config_start.display()))?;
+        if let Some(config_root) = config::nearest_config_dir(&config_start, root) {
+            roots.insert(config_root);
+        }
+
+        let walker = walkdir::WalkDir::new(path)
+            .into_iter()
+            .filter_entry(|entry| {
+                let name = entry.file_name().to_string_lossy();
+                !(entry.file_type().is_dir()
+                    && (name == ".git" || name == "target" || name == "node_modules"))
+            });
+        for entry in walker {
+            let entry = entry.with_context(|| format!("walking {}", path.display()))?;
+            if entry.file_type().is_file() && entry.file_name() == "btt.toml" {
+                let Some(parent) = entry.path().parent() else {
+                    continue;
+                };
+                let absolute = std::path::absolute(parent)
+                    .with_context(|| format!("resolving {}", parent.display()))?;
+                if absolute.starts_with(root) {
+                    roots.insert(absolute);
+                }
+            }
+        }
+    }
+    Ok(roots.into_iter().collect())
+}
+
+fn cmd_check(paths: &[PathBuf], jobs: Option<NonZeroUsize>, root: &Path) -> Result<ExitCode> {
     let search = if paths.is_empty() {
         vec![root.to_path_buf()]
     } else {
@@ -145,15 +192,46 @@ fn cmd_check(
     };
     let tree_files = runner::find_tree_files(&search)?;
 
+    let mut subtrees = std::collections::BTreeMap::new();
+    for sub_root in subtree_roots(&search, &tree_files, root)? {
+        let cfg = config::load(&sub_root)?;
+        let packs = load_packs(&sub_root, &cfg)?;
+        subtrees.insert(sub_root, Subtree { cfg, packs });
+    }
+
+    let mut grouped_trees: std::collections::BTreeMap<PathBuf, Vec<PathBuf>> =
+        std::collections::BTreeMap::new();
+    for tree in &tree_files {
+        grouped_trees
+            .entry(config::governing_root(tree, root))
+            .or_default()
+            .push(tree.clone());
+    }
+
     let run = || {
-        let outcomes = runner::check_all(&packs, &tree_files, cfg.check);
-        let scan = match cfg.check.uncovered {
-            Level::Ignore => runner::UncoveredScan::default(),
-            Level::Error | Level::Warn => runner::find_uncovered(&packs, &search, &tree_files),
-        };
-        (outcomes, scan)
+        let mut outcomes = Vec::new();
+        for (sub_root, trees) in &grouped_trees {
+            let subtree = &subtrees[sub_root];
+            outcomes.extend(runner::check_all(&subtree.packs, trees, subtree.cfg.check));
+        }
+        outcomes.sort_by(|a, b| a.tree_path.cmp(&b.tree_path));
+
+        let mut scans = Vec::new();
+        for (sub_root, subtree) in &subtrees {
+            let level = subtree.cfg.check.uncovered;
+            if level == Level::Ignore {
+                continue;
+            }
+            let mut scan = runner::find_uncovered(&subtree.packs, &search, &tree_files);
+            scan.uncovered
+                .retain(|item| config::governing_root(&item.path, root) == *sub_root);
+            scan.failed
+                .retain(|(path, _)| config::governing_root(path, root) == *sub_root);
+            scans.push((level, scan));
+        }
+        (outcomes, scans)
     };
-    let (outcomes, scan) = match jobs {
+    let (outcomes, scans) = match jobs {
         Some(jobs) => rayon::ThreadPoolBuilder::new()
             .num_threads(jobs.get())
             .build()
@@ -163,30 +241,13 @@ fn cmd_check(
         None => run(),
     };
 
-    if tree_files.is_empty() && scan.uncovered.is_empty() && scan.failed.is_empty() {
+    if tree_files.is_empty()
+        && scans
+            .iter()
+            .all(|(_, scan)| scan.uncovered.is_empty() && scan.failed.is_empty())
+    {
         println!("no .tree files found");
         return Ok(ExitCode::SUCCESS);
-    }
-
-    // Config is read only from the invocation root; surface any nested
-    // btt.toml that governs a subtree but is not being applied.
-    let mut nested_configs = std::collections::BTreeSet::new();
-    for tree_path in &tree_files {
-        let dir = tree_path.parent().unwrap_or(Path::new("."));
-        let dir = std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
-        if let Some(cfg_dir) = config::nearest_config_dir(&dir, root)
-            && cfg_dir != root
-        {
-            nested_configs.insert(cfg_dir);
-        }
-    }
-    for dir in &nested_configs {
-        println!(
-            "note: ignoring nested config {} (config is read only from {}); run btt from {} to apply it",
-            dir.join("btt.toml").display(),
-            root.join("btt.toml").display(),
-            dir.display()
-        );
     }
 
     let (mut errors, mut warnings) = (0usize, 0usize);
@@ -198,17 +259,21 @@ fn cmd_check(
             println!("{line}");
         }
     }
-    let scan_report = render_scan(&scan, cfg.check.uncovered, root);
-    errors += scan_report.errors;
-    warnings += scan_report.warnings;
-    for line in &scan_report.lines {
-        println!("{line}");
+    let mut uncovered = 0usize;
+    for (level, scan) in &scans {
+        uncovered += scan.uncovered.len();
+        let scan_report = render_scan(scan, *level, root);
+        errors += scan_report.errors;
+        warnings += scan_report.warnings;
+        for line in &scan_report.lines {
+            println!("{line}");
+        }
     }
     // Only claim an uncovered count when the scan actually ran.
-    let uncovered_part = if cfg.check.uncovered == Level::Ignore {
+    let uncovered_part = if scans.is_empty() {
         String::new()
     } else {
-        format!("{} uncovered, ", scan.uncovered.len())
+        format!("{uncovered} uncovered, ")
     };
     println!(
         "\n{} tree file(s), {uncovered_part}{errors} error(s), {warnings} warning(s)",
@@ -216,7 +281,7 @@ fn cmd_check(
     );
     // Spec drift exits 1; a file that could not be checked at all is a tool
     // failure and exits 2, like every other tool error.
-    let failed = !scan.failed.is_empty()
+    let failed = scans.iter().any(|(_, scan)| !scan.failed.is_empty())
         || outcomes
             .iter()
             .any(|o| matches!(o.result, runner::FileResult::Failed(_)));
@@ -371,10 +436,11 @@ fn cmd_scaffold(
     force: bool,
     to_stdout: bool,
     root: &Path,
-    cfg: &config::ProjectConfig,
 ) -> Result<ExitCode> {
+    let sub_root = config::governing_root(tree_path, root);
+    let cfg = config::load(&sub_root)?;
     let pack = if let Some(name) = pack_name {
-        pack::load(&name, root)?
+        pack::load(&name, &sub_root)?
     } else if cfg.project.packs.is_empty() {
         // Unconfigured: only builtins are candidates, as in `check`.
         let builtins = pack::builtin_names();
@@ -392,7 +458,7 @@ fn cmd_scaffold(
                 cfg.project.packs.join(", ")
             );
         };
-        pack::load(only, root)?
+        pack::load(only, &sub_root)?
     };
 
     let spec_src = std::fs::read_to_string(tree_path)

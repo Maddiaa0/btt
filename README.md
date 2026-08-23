@@ -154,6 +154,12 @@ Missing tests are always errors, and `btt check` exits non-zero on errors.
 `uncovered` also reports test files that have no spec at all — keep it at
 `warn` while adopting, then ratchet everything to `error` in CI.
 
+In a monorepo, subdirectories can carry their own `btt.toml`. Each `.tree`
+file is governed by the *nearest* `btt.toml` at or above it (nearest wins
+wholesale — sections are not merged), and that config's directory is also
+the root for its project-local `.btt/packs/`. So per-package pack lists and
+severities apply even when `btt check` runs from the repo root.
+
 ## Commands
 
 | command | |

@@ -1,4 +1,7 @@
 /target
 *.wasm
-
 /design-reference
+web/node_modules/
+web/*/node_modules/
+web/*/dist/
+web/*/.astro/

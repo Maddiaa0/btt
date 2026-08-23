@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/hero.svg" alt="A forest formed from branching btt commands and test vocabulary, above the btt wordmark and an example checker specification" width="920">
+</p>
+
 # btt — branch tree testing, for any language
 
 A generalization of [bulloak](https://bulloak.dev). Test suites are specified

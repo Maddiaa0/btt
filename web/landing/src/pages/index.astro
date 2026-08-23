@@ -1,0 +1,96 @@
+---
+import "@fontsource/ibm-plex-mono/latin-400.css";
+import "@fontsource/ibm-plex-mono/latin-500.css";
+import "@fontsource/ibm-plex-sans/latin-400.css";
+import "@fontsource/newsreader/latin-300.css";
+import "@fontsource/newsreader/latin-300-italic.css";
+import "../styles/global.css";
+
+const repositoryUrl = "https://github.com/Maddiaa0/btt";
+const installCommand = `cargo install --git ${repositoryUrl}`;
+const description =
+  "btt scaffolds tests from branching .tree specs and checks that code and specification stay in sync.";
+const checkerTree = `checker
+├── when the file matches the spec
+│   ├── it reports no findings
+│   └── it sees through wrapper blocks
+├── when a test is missing
+│   └── it reports it with the spec line
+├── when the file has extra tests
+│   └── it reports each extra node
+└── when sibling order differs
+    └── it reports an order finding`;
+// `frame-ancestors` is set in the HTTP header because browsers ignore that
+// directive in a meta-delivered policy.
+const productionMetaCsp =
+  "default-src 'self'; base-uri 'none'; connect-src 'none'; font-src 'self'; form-action 'none'; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self'";
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content={description} />
+    <meta name="theme-color" content="#faf9f5" />
+    <meta name="color-scheme" content="light" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="btt — branch tree testing" />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content="https://btt.maddiaa.com/" />
+    <meta property="og:site_name" content="btt" />
+    <meta name="twitter:card" content="summary" />
+    <link rel="canonical" href="https://btt.maddiaa.com/" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    {
+      import.meta.env.PROD && (
+        <meta http-equiv="Content-Security-Policy" content={productionMetaCsp} />
+      )
+    }
+    <title>btt — branch tree testing</title>
+  </head>
+  <body>
+    <main class="landing" id="main-content">
+      <section class="hero" aria-labelledby="btt-title">
+        <div class="forest" aria-hidden="true">
+          <canvas id="forest-canvas"></canvas>
+        </div>
+
+        <div class="hero-footer">
+          <div class="identity">
+            <h1 id="btt-title">btt</h1>
+            <p class="tagline">
+              extendible toolbox for a branch tree testing; understand the code's
+              tests at a glance
+            </p>
+
+            <div class="actions">
+              <button
+                class="install-command"
+                id="copy-install"
+                type="button"
+                data-command={installCommand}
+                aria-describedby="copy-status"
+              >
+                <span>{installCommand}</span>
+              </button>
+              <span class="copy-status" id="copy-status" aria-live="polite"></span>
+
+              <nav aria-label="Project links">
+                <a href={repositoryUrl}>github</a>
+                <a href={`${repositoryUrl}#readme`}>readme</a>
+                <span title="MIT licensed">mit</span>
+              </nav>
+            </div>
+          </div>
+
+          <figure class="tree-example">
+            <pre><code>{checkerTree}</code></pre>
+          </figure>
+        </div>
+      </section>
+    </main>
+
+    <script src="../scripts/landing.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://btt.maddiaa.com/sitemap.xml

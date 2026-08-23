@@ -52,8 +52,16 @@ Configured per language by packs (see `btt packs`; project config in
 - **Rust** (`name.tree` ↔ `name.rs`): each branch is a nested
   `mod when_the_key_is_present { use super::*; … }`; each leaf is a
   `#[test] fn returns_the_value()` (the `it ` prefix is dropped,
-  snake_case). A surrounding `#[cfg(test)] mod tests { … }` wrapper is
-  allowed and ignored by the checker.
+  snake_case). The file shape follows its location — this is the
+  convention, and `btt scaffold` applies it automatically:
+  - colocated with source (`src/…`): wrap everything in
+    `#[cfg(test)] mod tests { use super::*; … }` so tests compile out
+    of non-test builds;
+  - in a `tests/` integration crate: no wrapper — the whole file is
+    already test-only code, so `when` mods sit at the file root.
+
+  The checker treats the `tests` wrapper as structurally transparent,
+  so it never appears in the `.tree`.
 - **TypeScript** (`name.tree` ↔ `name.test.ts`): the root is a top-level
   `describe("HashMap", …)`; branches are nested `describe`s with the
   condition text verbatim; leaves are `it("returns the value", …)`.

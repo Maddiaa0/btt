@@ -8,6 +8,13 @@ Every test module has a `.tree` spec next to it (`src/*.tree`,
 verify with `cargo run -- check` (also enforced by `tests/selfcheck.rs`).
 Never add, rename, or reorder tests without updating the spec tree.
 
+Rust test-file shape follows location (what `btt scaffold` emits):
+`src/*.rs` wrap tests in `#[cfg(test)] mod tests { use super::*; … }`
+with the `mod when_*` branches inside; `tests/*.rs` are integration
+crates and stay flat — `mod when_*` at the file root, no wrapper. The
+checker treats the `tests` wrapper as transparent, so `.tree` specs are
+identical either way.
+
 Before finishing any change: `cargo test` and
 `cargo clippy --all-targets -- -D warnings` (pedantic is enforced via
 `[lints]`). If you touched wasm-grammar code, also run both with

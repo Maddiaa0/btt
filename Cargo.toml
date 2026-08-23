@@ -30,3 +30,7 @@ lto = true
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 module_name_repetitions = "allow"
+
+[features]
+default = []
+wasm = ["tree-sitter/wasm"]

@@ -1,0 +1,5 @@
+wasm grammar equivalence
+├── when parsing rust through a wasm grammar
+│   └── it matches the native extraction
+└── when parsing typescript through a wasm grammar
+    └── it matches the native extraction

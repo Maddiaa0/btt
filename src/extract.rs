@@ -30,7 +30,7 @@ pub enum ActualKind {
 }
 
 /// One node of the structure actually present in a test file.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActualNode {
     /// Block or test.
     pub kind: ActualKind,
@@ -78,9 +78,7 @@ struct Capture {
 /// Fails if the pack's grammar is unavailable, its query does not compile or
 /// lacks the required captures, or tree-sitter cannot parse the source.
 pub fn extract(pack: &Pack, target: &Path, source: &str) -> Result<Vec<ActualNode>> {
-    let language = pack::language_for(pack, target)?;
-    let mut parser = Parser::new();
-    parser.set_language(&language)?;
+    let (mut parser, language) = configure_parser(pack, target)?;
     let tree = parser
         .parse(source, None)
         .ok_or_else(|| Error::SourceParse { path: target.to_path_buf() })?;
@@ -142,6 +140,54 @@ pub fn extract(pack: &Pack, target: &Path, source: &str) -> Result<Vec<ActualNod
     let mut i = 0;
     let top = build_nodes(&captures, &mut i, usize::MAX);
     Ok(ActualNode::prune_empty_blocks(top))
+}
+
+/// Build a parser for the pack's grammar. For a WASM grammar the parser
+/// carries the sandbox store the language was instantiated in, so both are
+/// returned together and must stay alive for the whole extraction.
+fn configure_parser(pack: &Pack, target: &Path) -> Result<(Parser, tree_sitter::Language)> {
+    let mut parser = Parser::new();
+    let language = match pack::grammar_for(pack, target)? {
+        pack::Grammar::Native(language) => language,
+        pack::Grammar::Wasm { symbol, bytes } => {
+            #[cfg(feature = "wasm")]
+            {
+                wasm_language(&mut parser, pack, &symbol, bytes)?
+            }
+            #[cfg(not(feature = "wasm"))]
+            {
+                let _ = (symbol, bytes);
+                return Err(Error::WasmUnsupported { pack: pack.name().to_string() });
+            }
+        }
+    };
+    parser.set_language(&language)?;
+    Ok((parser, language))
+}
+
+/// Instantiate a grammar module inside a sandboxed wasmtime store (no WASI:
+/// the grammar can only compute over the bytes we feed it) and attach the
+/// store to the parser.
+#[cfg(feature = "wasm")]
+fn wasm_language(
+    parser: &mut Parser,
+    pack: &Pack,
+    symbol: &str,
+    bytes: &[u8],
+) -> Result<tree_sitter::Language> {
+    use std::sync::OnceLock;
+    use tree_sitter::wasmtime::Engine;
+
+    static ENGINE: OnceLock<Engine> = OnceLock::new();
+    let engine = ENGINE.get_or_init(Engine::default);
+    let err = |e: &dyn std::fmt::Display| Error::WasmGrammar {
+        pack: pack.name().to_string(),
+        message: e.to_string(),
+    };
+    let mut store = tree_sitter::WasmStore::new(engine).map_err(|e| err(&e))?;
+    let language = store.load_language(symbol, bytes).map_err(|e| err(&e))?;
+    parser.set_wasm_store(store).map_err(|e| err(&e))?;
+    Ok(language)
 }
 
 fn build_nodes(captures: &[Capture], i: &mut usize, parent_end: usize) -> Vec<ActualNode> {

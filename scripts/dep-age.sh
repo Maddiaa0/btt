@@ -23,8 +23,9 @@ checked=0
 # blocks with a crates.io source are registry deps (path/workspace deps
 # have no source line).
 while read -r name ver; do
-  created=$(curl -sf --retry 2 -H "User-Agent: $UA" \
-    "https://crates.io/api/v1/crates/${name}/${ver}" | jq -r '.version.created_at')
+  # `|| true` keeps one rate-limited request from aborting the whole audit.
+  created=$({ curl -sf --retry 3 --retry-delay 2 -H "User-Agent: $UA" \
+    "https://crates.io/api/v1/crates/${name}/${ver}" | jq -r '.version.created_at'; } 2>/dev/null || true)
   if [[ -z "$created" || "$created" == "null" ]]; then
     echo "warn: could not fetch publish date for ${name}@${ver}" >&2
     continue

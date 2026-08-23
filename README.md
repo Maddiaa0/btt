@@ -60,9 +60,28 @@ test conventions:
 Adding a language never means rebuilding the binary: drop a pack folder in
 `.btt/packs/` and it loads at runtime. Packs contain no executable code
 (manifest + query + templates), so vendoring one is reviewable like any
-config change. Grammars currently come compiled into the core
-(`builtin:rust`, `builtin:typescript`); sandboxed `wasm:` grammar loading is
-the planned extension point for fully self-contained packs.
+config change.
+
+### Sandboxed WASM grammars (experimental)
+
+With the `wasm` feature (`cargo install btt --features wasm`), a pack can
+ship its own grammar instead of relying on a builtin:
+
+```toml
+[grammar]
+source = "wasm:grammar.wasm"   # a `tree-sitter build --wasm` artifact
+symbol = "rust"                # module exports tree_sitter_<symbol>
+```
+
+This is the same architecture Zed uses: the tree-sitter runtime stays
+native, while the grammar module — including any external scanner code, the
+only arbitrary code a grammar ships — is instantiated in a wasmtime store
+with no WASI, so it cannot touch the filesystem or network. The
+`packs-wasm/` directory holds wasm twins of the builtin packs (grammars
+fetched by `scripts/fetch-wasm-grammars.sh`, pinned by release tag and
+sha256), and `tests/wasm.rs` proves they extract structure identical to the
+natively compiled grammars. Without the feature, the core stays lean and
+wasm packs fail with a clear error.
 
 ## Configuration
 

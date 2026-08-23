@@ -24,6 +24,21 @@ jobs:
       - name: BTT self-check
         run: cargo run -- check
 
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Fetch pinned wasm grammars
+        run: ./scripts/fetch-wasm-grammars.sh
+      - name: Test (wasm grammars)
+        run: cargo test --features wasm
+      - name: Clippy (wasm, no warnings)
+        run: cargo clippy --all-targets --features wasm -- -D warnings
+
   dep-age:
     runs-on: ubuntu-latest
     steps:

@@ -117,9 +117,13 @@ pub struct StringRule {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Opener {
-    /// Regex matched against code (comments/strings masked out). Must
-    /// define a `(?<name>...)` capture for the title, including its
-    /// quotes when `extract.name_syntax` decodes them.
+    /// Regex matched against the source with comments blanked to
+    /// whitespace. Must define `(?<kw>...)` on the keyword (must land on
+    /// real code) and `(?<name>...)` on the name — a string literal
+    /// including its quotes for `name_syntax = "js-string"`, a code
+    /// identifier for `"raw"`. The pattern must also include the
+    /// definition's opening bracket (the call's `(`, a body's `{`): its
+    /// matching closer bounds the definition's span for nesting.
     pub open: String,
 }
 
@@ -343,11 +347,11 @@ fn validate(manifest: &Manifest) -> Result<()> {
         message: message.to_string(),
     };
     if matches!(manifest.grammar.source, GrammarSource::Lexical) {
-        if manifest.lexical.is_none() {
+        let Some(lexical) = &manifest.lexical else {
             return Err(shape(
                 "grammar source `lexical` requires a [lexical] section",
             ));
-        }
+        };
         if manifest.extract.query.is_some() {
             return Err(shape("lexical packs must not set extract.query"));
         }
@@ -356,6 +360,13 @@ fn validate(manifest: &Manifest) -> Result<()> {
                 "extract.test_requires_marker is not supported by lexical packs",
             ));
         }
+        // The full profile is checked here so a malformed pack fails its
+        // load, not extraction mid-run (or worse: a hang on a degenerate
+        // token).
+        crate::lexical::validate_profile(lexical).map_err(|message| Error::Lexical {
+            pack: pack.clone(),
+            message,
+        })?;
     } else {
         if manifest.lexical.is_some() {
             return Err(shape("[lexical] requires grammar source `lexical`"));

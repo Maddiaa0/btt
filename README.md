@@ -151,16 +151,30 @@ open = '...regex with a (?<name>...) capture...'
 open = '...'
 ```
 
-The core masks comments and strings, matches openers only in real code,
-and derives nesting from bracket spans — the same structural containment
-rule the grammar path uses. The payoff is the extension story: a lexical
-pack is 100% reviewable text, no compiled artifact to vet or distribute.
-The tradeoff is a lower robustness ceiling (syntax the profile cannot
-see, like JS regex literals, is invisible), so the scanner **fails
-closed** on anything it cannot balance, and `packs-lexical/typescript`
-is differentially fuzzed against the native grammar in
-`tests/lexical.rs` to keep the two extraction paths byte-identical on
-realistic test files.
+The core masks comments and strings, matches openers only in real code
+(comment trivia between tokens behaves as whitespace), and derives
+nesting from bracket spans — the same structural containment rule the
+grammar path uses. Two shapes are covered: call-pattern tests
+(`it("title", ...)`, `name_syntax = "js-string"`) and
+declaration-pattern tests (`function test_x(`, `mod when_y {`,
+`name_syntax = "raw"`), which is enough for BDD frameworks and
+prefix-named test conventions (Foundry, Go, pytest-style).
+
+Be clear-eyed about the tradeoff: **a lexical pack will not be perfect.**
+It is deliberately not a parser — syntax the profile cannot see (JS regex
+literals and template interpolation, Python's indentation nesting, Ruby's
+`do … end`, attribute markers like `#[test]`) is out of scope, by design.
+That is the price of the extension story: the whole language definition
+is reviewable text that fits on one screen, installs by dropping a
+folder, and needs no compiled artifact to vet, pin, or distribute. What
+makes the imperfection safe rather than silent is that the scanner
+**fails closed** — malformed profiles fail at pack load, and files it
+cannot fully account for (unbalanced brackets, unterminated strings or
+comments) are tool errors, never partial extractions. When a language
+outgrows the profile, the answer is a grammar pack (`wasm:`), not a
+cleverer regex. `packs-lexical/typescript` is differentially fuzzed
+against the native grammar in `tests/lexical.rs` to keep the two
+extraction paths identical on realistic test files.
 
 ## Configuration
 

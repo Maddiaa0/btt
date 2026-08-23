@@ -148,3 +148,33 @@ mod when_a_manifest_contains_unknown_fields {
         assert!(err.to_string().contains("test_require_marker"), "{err}");
     }
 }
+
+mod when_a_project_pack_shadows_a_builtin_name {
+    use super::*;
+
+    // Activation is explicit: `packs = ["rust"]` opts into resolution
+    // order (shadowing is then a vendoring feature), but the unconfigured
+    // default loads embedded packs directly — a repo cannot smuggle a
+    // pack into an unconfigured run by reusing a builtin's name.
+    #[test]
+    fn is_bypassed_by_the_builtin_loader() {
+        let root = repo_root().join("target/hardening-fixtures/shadow-root");
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = root.join(".btt/packs/rust");
+        std::fs::create_dir_all(dir.join("queries")).unwrap();
+        std::fs::create_dir_all(dir.join("templates")).unwrap();
+        std::fs::write(dir.join("queries/tests.scm"), "").unwrap();
+        std::fs::write(dir.join("templates/test.jinja"), "").unwrap();
+        std::fs::write(
+            dir.join("pack.toml"),
+            VALID_MANIFEST.replace("name = \"fixture\"", "name = \"rust\""),
+        )
+        .unwrap();
+
+        let shadowed = pack::load("rust", &root).unwrap();
+        assert!(matches!(shadowed.origin, pack::Origin::Project(_)));
+
+        let builtin = pack::load_builtin("rust").unwrap();
+        assert!(matches!(builtin.origin, pack::Origin::Builtin));
+    }
+}

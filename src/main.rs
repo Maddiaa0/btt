@@ -83,25 +83,44 @@ fn run(cli: Cli) -> Result<ExitCode> {
     }
 }
 
-/// Load the project's configured packs, or every available pack when the
-/// project doesn't pin any.
+/// Load the project's configured packs; with no `packs = [...]`, only the
+/// builtins embedded in this binary. Project and user packs can carry
+/// executable grammar code and control what is parsed and how — presence
+/// in a directory is never activation, the config must name them.
 fn load_packs(root: &Path, cfg: &config::ProjectConfig) -> Result<Vec<pack::Pack>> {
-    let names: Vec<String> = if cfg.project.packs.is_empty() {
-        pack::available(root)
-            .into_iter()
-            .map(|(name, _)| name)
-            .collect()
+    let packs: Vec<pack::Pack> = if cfg.project.packs.is_empty() {
+        warn_inactive_packs(root);
+        pack::builtin_names()
+            .iter()
+            .map(|n| pack::load_builtin(n))
+            .collect::<btt::Result<_>>()?
     } else {
-        cfg.project.packs.clone()
+        cfg.project
+            .packs
+            .iter()
+            .map(|n| pack::load(n, root))
+            .collect::<btt::Result<_>>()?
     };
-    let packs: Vec<pack::Pack> = names
-        .iter()
-        .map(|n| pack::load(n, root))
-        .collect::<btt::Result<_>>()?;
     // Deterministic pre-flight: wasm symbol collisions are caught here,
     // once, rather than nondeterministically inside parallel workers.
     pack::validate_set(&packs)?;
     Ok(packs)
+}
+
+/// An unconfigured run ignores project/user packs; say so instead of
+/// silently not finding their tests.
+fn warn_inactive_packs(root: &Path) {
+    let inactive: Vec<String> = pack::available(root)
+        .into_iter()
+        .filter(|(_, origin)| *origin != pack::Origin::Builtin)
+        .map(|(name, origin)| format!("{name} [{origin}]"))
+        .collect();
+    if !inactive.is_empty() {
+        eprintln!(
+            "note: ignoring {} — packs are only active when btt.toml names them (packs = [...])",
+            inactive.join(", ")
+        );
+    }
 }
 
 /// The rendered outcome of checking one tree file, assembled off-thread so
@@ -356,18 +375,21 @@ fn cmd_scaffold(
 ) -> Result<ExitCode> {
     let pack = if let Some(name) = pack_name {
         pack::load(&name, root)?
-    } else {
-        let mut packs = cfg.project.packs.clone();
-        if packs.is_empty() {
-            packs = pack::available(root)
-                .into_iter()
-                .map(|(name, _)| name)
-                .collect();
-        }
-        let [only] = packs.as_slice() else {
+    } else if cfg.project.packs.is_empty() {
+        // Unconfigured: only builtins are candidates, as in `check`.
+        let builtins = pack::builtin_names();
+        let [only] = builtins.as_slice() else {
             bail!(
                 "multiple packs available ({}); pick one with --pack",
-                packs.join(", ")
+                builtins.join(", ")
+            );
+        };
+        pack::load_builtin(only)?
+    } else {
+        let [only] = cfg.project.packs.as_slice() else {
+            bail!(
+                "multiple packs configured ({}); pick one with --pack",
+                cfg.project.packs.join(", ")
             );
         };
         pack::load(only, root)?
@@ -429,9 +451,10 @@ fn cmd_packs(root: &Path) -> ExitCode {
 const DEFAULT_CONFIG: &str = r#"# btt — branch tree testing (https://github.com/Maddiaa0/btt)
 
 [project]
-# Packs this project uses, in routing-priority order.
-# Project-local packs in .btt/packs/ override user ($XDG_CONFIG_HOME/btt/packs,
-# then legacy ~/.btt/packs) and builtin ones.
+# Packs this project uses, in routing-priority order. Only packs named here
+# are active (with no list, only builtins load). A named pack resolves from
+# .btt/packs/, then user dirs ($XDG_CONFIG_HOME/btt/packs, legacy
+# ~/.btt/packs), then the builtins.
 packs = ["rust"]
 
 [check]

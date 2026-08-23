@@ -82,7 +82,12 @@ $XDG_CONFIG_HOME/btt/packs/<name>/   # user-global (default ~/.config/btt/packs)
 ```
 
 Adding a language never means rebuilding the binary: drop a pack folder in
-`.btt/packs/` and it loads at runtime. The trust boundary is explicit:
+`.btt/packs/` and name it in `packs = [...]`. Activation is explicit —
+with no configured list only the builtins load, so a pack sitting in a
+directory (a cloned repo's `.btt/packs/`, a stale user dir) is never
+executed just for being visible. Named packs resolve in the order above,
+which makes vendoring an override of a builtin a feature you asked for,
+not a surprise. The trust boundary is explicit:
 
 - **Pack data** (manifest, query, naming rules, templates) is declarative —
   reviewable like any config change. Manifests are parsed strictly and
@@ -128,7 +133,7 @@ property of today's implementation.
 
 ```toml
 [project]
-packs = ["rust"]        # routing-priority order
+packs = ["rust"]        # routing-priority order; empty/absent = builtins only
 
 [check]
 extra = "warn"          # tests in the file but not the tree: error|warn|ignore

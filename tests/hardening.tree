@@ -8,5 +8,7 @@ pack hardening
 │   └── it refuses to load
 ├── when a target pattern is not reversible
 │   └── it refuses to load
-└── when a manifest contains unknown fields
-    └── it refuses to load
+├── when a manifest contains unknown fields
+│   └── it refuses to load
+└── when a project pack shadows a builtin name
+    └── it is bypassed by the builtin loader

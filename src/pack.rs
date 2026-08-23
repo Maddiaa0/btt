@@ -14,6 +14,11 @@
 //!   3. `~/.btt/packs/foo/`                (user-global, legacy location)
 //!   4. packs embedded in the binary       (rust, typescript)
 //!
+//! Activation is explicit: packs load when `btt.toml` names them
+//! (`packs = [...]`). With no configured list, only the embedded builtins
+//! are active ([`load_builtin`]) — a pack sitting in a directory is never
+//! executed just for being visible.
+//!
 //! ## Trust model
 //!
 //! - **Core** (this binary): configuration, routing, mapping, diffing,
@@ -507,6 +512,26 @@ pub fn load(name: &str, project_root: &Path) -> Result<Pack> {
         name: name.to_string(),
         builtins: builtin_names(),
     })
+}
+
+/// Load an embedded pack directly, bypassing project/user resolution.
+///
+/// This is the unconfigured default: with no `packs = [...]` in
+/// `btt.toml`, only the binary's own packs run — a repo cannot smuggle a
+/// pack into an unconfigured run by reusing a builtin's name in
+/// `.btt/packs/`. Shadowing a builtin is opted into by naming it.
+///
+/// # Errors
+///
+/// Returns [`Error::PackNotFound`] if the binary embeds no such pack.
+pub fn load_builtin(name: &str) -> Result<Pack> {
+    match EMBEDDED_PACKS.get_dir(name) {
+        Some(dir) => load_embedded(dir),
+        None => Err(Error::PackNotFound {
+            name: name.to_string(),
+            builtins: builtin_names(),
+        }),
+    }
 }
 
 /// Names of all packs visible from a project, with their winning origin,

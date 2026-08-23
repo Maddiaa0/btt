@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="14" fill="#f8f7f2"/>
+  <path d="M32 50V29m0 7-10-9m10 5 10-11m-20 6-7-8m27 2 7-8" fill="none" stroke="#48453f" stroke-width="3" stroke-linecap="square"/>
+  <circle cx="15" cy="19" r="3" fill="#777269"/>
+  <circle cx="49" cy="13" r="3" fill="#777269"/>
+  <text x="32" y="59" text-anchor="middle" font-family="monospace" font-size="12" fill="#292722">btt</text>
+</svg>

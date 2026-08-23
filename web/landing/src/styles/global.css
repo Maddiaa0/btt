@@ -1,0 +1,233 @@
+:root {
+  color: #1c1a16;
+  background: #faf9f5;
+  font-family: "Newsreader", serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+  padding: 0;
+  background: #faf9f5;
+}
+
+body {
+  overflow: hidden;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+a {
+  color: #6d675c;
+  text-decoration: none;
+}
+
+a:hover {
+  color: #1c1a16;
+  text-decoration: underline;
+}
+
+a:focus-visible,
+button:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid #6d675c;
+  outline-offset: 4px;
+}
+
+::selection {
+  color: #1c1a16;
+  background: #e6e2d6;
+}
+
+.landing {
+  display: flex;
+  width: 100vw;
+  height: 100vh;
+  align-items: center;
+  justify-content: center;
+  background: #faf9f5;
+}
+
+.hero {
+  display: flex;
+  width: min(1140px, 94vw);
+  flex-direction: column;
+  align-items: center;
+}
+
+.forest {
+  position: relative;
+  width: 100%;
+  min-height: 300px;
+  height: 62vh;
+  overflow: hidden;
+  animation: rise-in 1.4s 0.1s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+#forest-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.hero-footer {
+  display: flex;
+  gap: clamp(40px, 6vw, 90px);
+  align-items: center;
+  justify-content: center;
+  padding-top: 3vh;
+  animation: rise-in 1.6s 0.5s both;
+}
+
+.identity {
+  text-align: center;
+}
+
+.identity h1 {
+  margin: 0;
+  color: #1c1a16;
+  font-size: clamp(22px, 3.6vh, 32px);
+  font-weight: 400;
+  letter-spacing: 0.55em;
+  line-height: normal;
+  text-indent: 0.55em;
+}
+
+.tagline {
+  max-width: 320px;
+  margin: 1vh 0 0;
+  color: #4a463e;
+  font-size: clamp(11px, 1.6vh, 14px);
+  font-style: italic;
+  font-weight: 300;
+  line-height: normal;
+}
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  margin-top: 2.2vh;
+}
+
+.install-command {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #6d675c;
+  cursor: pointer;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: clamp(10px, 1.4vh, 12px);
+  letter-spacing: 0.02em;
+}
+
+.install-command:hover,
+.install-command.copied {
+  color: #1c1a16;
+}
+
+.copy-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.actions nav {
+  display: flex;
+  gap: 14px;
+  color: #a5a093;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: clamp(9px, 1.3vh, 11px);
+}
+
+.actions nav a {
+  color: #a5a093;
+}
+
+.actions nav a:hover {
+  color: #1c1a16;
+}
+
+.tree-example {
+  min-width: 0;
+  margin: 0;
+}
+
+.tree-example pre {
+  margin: 0;
+  color: #4a463e;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: clamp(9px, 1.35vh, 12px);
+  line-height: 1.55;
+  text-align: left;
+  white-space: pre;
+}
+
+.tree-example code {
+  font: inherit;
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 720px), (max-height: 640px) and (max-width: 900px) {
+  body {
+    overflow: auto;
+  }
+
+  .landing {
+    height: auto;
+    min-height: 100svh;
+    padding: 18px 0 36px;
+  }
+
+  .forest {
+    height: 56svh;
+  }
+
+  .hero-footer {
+    flex-direction: column;
+    gap: 34px;
+  }
+
+  .tree-example {
+    max-width: 94vw;
+    overflow-x: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

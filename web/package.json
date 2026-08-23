@@ -1,0 +1,14 @@
+{
+  "name": "btt-web",
+  "private": true,
+  "packageManager": "pnpm@10.34.5",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "build": "pnpm --filter @btt/landing build",
+    "check": "pnpm --filter @btt/landing check",
+    "dev": "pnpm --filter @btt/landing dev",
+    "start": "pnpm --filter @btt/landing start"
+  }
+}

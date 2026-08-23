@@ -9,6 +9,7 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 keywords = ["testing", "bulloak", "btt", "tree-sitter", "scaffold"]
 categories = ["development-tools::testing", "command-line-utilities"]
+exclude = ["/web"]
 
 [dependencies]
 anyhow = "1.0.104"

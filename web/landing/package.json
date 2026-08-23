@@ -1,0 +1,27 @@
+{
+  "name": "@btt/landing",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "build": "astro build",
+    "check": "astro check",
+    "dev": "astro dev --host 0.0.0.0",
+    "preview": "astro preview --host 0.0.0.0",
+    "start": "serve dist -l $PORT --no-clipboard"
+  },
+  "dependencies": {
+    "serve": "14.2.6"
+  },
+  "devDependencies": {
+    "@astrojs/check": "0.9.10",
+    "@fontsource/ibm-plex-mono": "5.3.0",
+    "@fontsource/ibm-plex-sans": "5.3.0",
+    "@fontsource/newsreader": "5.3.0",
+    "astro": "7.2.0",
+    "typescript": "6.0.3"
+  }
+}

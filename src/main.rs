@@ -1,10 +1,11 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use btt::check::Finding;
 use btt::config::{self, Level};
 use btt::extract::ActualKind;
 use btt::runner;
-use btt::{check, pack, scaffold, tree};
-use clap::{Parser, Subcommand};
+use btt::{check, install, pack, scaffold, tree};
+use clap::{Args, Parser, Subcommand};
+use std::io::{IsTerminal, Write};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -43,14 +44,71 @@ enum Command {
         #[arg(long)]
         stdout: bool,
     },
-    /// List available language packs and where they come from.
+    /// List available language packs (alias for `pack list`).
     Packs,
+    /// Install, inspect, and remove language packs.
+    Pack {
+        #[command(subcommand)]
+        cmd: PackCmd,
+    },
     /// Create btt.toml (and optionally an agent skill) in this project.
     Init {
         /// Also write .claude/skills/btt/SKILL.md for coding agents.
         #[arg(long)]
         skill: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum PackCmd {
+    /// List builtin and installed packs, with origin and status.
+    List,
+    /// Show a pack's manifest, files, digests, and install provenance.
+    Show {
+        /// The pack to inspect.
+        name: String,
+    },
+    /// Install a pack: curated selector by default, or --git / --path.
+    Install(InstallArgs),
+    /// Remove an installed pack (deletes its directory).
+    Rm {
+        /// The pack to remove.
+        name: String,
+        /// Remove from <project>/.btt/packs instead of the user dir.
+        #[arg(long)]
+        project: bool,
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+#[derive(Args)]
+struct InstallArgs {
+    /// Curated pack name (skips the interactive selector).
+    #[arg(conflicts_with_all = ["git", "path"])]
+    name: Option<String>,
+    /// Install from a git repository URL (cloned shallowly; no code runs).
+    #[arg(long, conflicts_with = "path")]
+    git: Option<String>,
+    /// Branch or tag to clone (with --git).
+    #[arg(long, requires = "git")]
+    r#ref: Option<String>,
+    /// Pack directory inside the repository (with --git).
+    #[arg(long, requires = "git")]
+    dir: Option<String>,
+    /// Install from a local directory.
+    #[arg(long)]
+    path: Option<PathBuf>,
+    /// Install into <project>/.btt/packs (vendored) instead of the user dir.
+    #[arg(long)]
+    project: bool,
+    /// Replace an already-installed pack of the same name.
+    #[arg(long)]
+    force: bool,
+    /// Skip the confirmation prompt (required when stdin is not a tty).
+    #[arg(long)]
+    yes: bool,
 }
 
 fn main() -> ExitCode {
@@ -78,7 +136,13 @@ fn run(cli: Cli) -> Result<ExitCode> {
             force,
             stdout,
         } => cmd_scaffold(&tree, pack, output, force, stdout, &root, &cfg),
-        Command::Packs => Ok(cmd_packs(&root)),
+        Command::Packs => Ok(cmd_pack_list(&root, &cfg)),
+        Command::Pack { cmd } => match cmd {
+            PackCmd::List => Ok(cmd_pack_list(&root, &cfg)),
+            PackCmd::Show { name } => cmd_pack_show(&name, &root),
+            PackCmd::Install(args) => cmd_pack_install(&args, &root),
+            PackCmd::Rm { name, project, yes } => cmd_pack_rm(&name, project, yes, &root),
+        },
         Command::Init { skill } => cmd_init(&root, skill),
     }
 }
@@ -439,17 +503,457 @@ fn cmd_scaffold(
     Ok(ExitCode::SUCCESS)
 }
 
-fn cmd_packs(root: &Path) -> ExitCode {
+fn grammar_kind(pack: &pack::Pack) -> String {
+    match &pack.manifest.grammar.source {
+        pack::GrammarSource::Builtin(g) => format!("builtin:{g}"),
+        pack::GrammarSource::Wasm(_) => "wasm".to_string(),
+        pack::GrammarSource::Lexical => "lexical".to_string(),
+    }
+}
+
+fn cmd_pack_list(root: &Path, cfg: &config::ProjectConfig) -> ExitCode {
+    let builtins = pack::builtin_names();
+    let user_dirs = pack::user_pack_dirs();
     for (name, origin) in pack::available(root) {
         match pack::load(&name, root) {
-            Ok(p) => println!(
-                "{name}  v{}  [{origin}]  {}",
-                p.manifest.pack.version, p.manifest.pack.description
-            ),
+            Ok(p) => {
+                let mut tags: Vec<String> = Vec::new();
+                if cfg.project.packs.contains(&name) {
+                    tags.push("active".to_string());
+                }
+                // Resolution order hides same-named packs from lower
+                // sources; say so instead of leaving it invisible.
+                let user_has = user_dirs
+                    .iter()
+                    .any(|d| d.join(&name).join("pack.toml").is_file());
+                match origin {
+                    pack::Origin::Project(_) => {
+                        if user_has {
+                            tags.push("shadows user".to_string());
+                        }
+                        if builtins.contains(&name) {
+                            tags.push("shadows builtin".to_string());
+                        }
+                    }
+                    pack::Origin::User(_) => {
+                        if builtins.contains(&name) {
+                            tags.push("shadows builtin".to_string());
+                        }
+                    }
+                    pack::Origin::Builtin => {}
+                }
+                let tags = if tags.is_empty() {
+                    String::new()
+                } else {
+                    format!("  ({})", tags.join(", "))
+                };
+                println!(
+                    "{name}  v{}  [{origin}]  grammar={}{tags}  {}",
+                    p.manifest.pack.version,
+                    grammar_kind(&p),
+                    p.manifest.pack.description
+                );
+            }
             Err(e) => println!("{name}  [{origin}]  (broken: {e})"),
         }
     }
     ExitCode::SUCCESS
+}
+
+fn print_file_table(files: &[install::StagedFile]) {
+    println!("files:");
+    for f in files {
+        println!(
+            "  {:<32} {:>9} B  sha256:{}…",
+            f.rel,
+            f.size,
+            &f.sha256[..12.min(f.sha256.len())]
+        );
+    }
+}
+
+fn wasm_blob_warning(pack: &pack::Pack) {
+    if let pack::GrammarSource::Wasm(file) = &pack.manifest.grammar.source {
+        println!(
+            "warning: contains a binary grammar blob (`{}`) — btt cannot review \
+             this for you; install only from sources you trust",
+            file.display()
+        );
+    }
+}
+
+fn cmd_pack_show(name: &str, root: &Path) -> Result<ExitCode> {
+    let p = pack::load(name, root)?;
+    println!(
+        "{} v{} — {}",
+        p.name(),
+        p.manifest.pack.version,
+        p.manifest.pack.description
+    );
+    println!("origin: {}", p.origin);
+    println!("grammar: {}", grammar_kind(&p));
+    println!("targets: {}", p.manifest.detect.targets.join(", "));
+    match &p.origin {
+        pack::Origin::Builtin => println!("files: embedded in the btt binary"),
+        pack::Origin::User(dir) | pack::Origin::Project(dir) => {
+            println!("directory: {}", dir.display());
+            let files = install::file_digests(dir, &p.manifest)?;
+            print_file_table(&files);
+            wasm_blob_warning(&p);
+            if let Some(receipt) = install::read_receipt(dir) {
+                println!(
+                    "installed: {} by {} (source: {})",
+                    receipt.install.date, receipt.install.installed_by, receipt.install.source
+                );
+                if let Some(url) = &receipt.install.url {
+                    println!("from: {url}");
+                }
+                if let Some(reference) = &receipt.install.reference {
+                    println!("ref: {reference}");
+                }
+                if let Some(commit) = &receipt.install.commit {
+                    println!("commit: {commit}");
+                }
+                let changed: Vec<&str> = files
+                    .iter()
+                    .filter(|f| receipt.files.get(&f.rel) != Some(&format!("sha256:{}", f.sha256)))
+                    .map(|f| f.rel.as_str())
+                    .collect();
+                if !changed.is_empty() {
+                    println!("modified since install: {}", changed.join(", "));
+                }
+            } else {
+                println!("no install receipt (vendored or copied by hand)");
+            }
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Prompt for yes/no on stdin. Callers must have checked the terminal.
+fn confirm(prompt: &str, default_yes: bool) -> Result<bool> {
+    let hint = if default_yes { "[Y/n]" } else { "[y/N]" };
+    print!("{prompt} {hint} ");
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    Ok(match line.trim().to_lowercase().as_str() {
+        "" => default_yes,
+        "y" | "yes" => true,
+        _ => false,
+    })
+}
+
+/// Prompt for a 1-based selection out of `count` items.
+fn select_number(count: usize) -> Result<usize> {
+    print!("install which? [1-{count}] ");
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    let n: usize = line.trim().parse().context("not a number")?;
+    if n == 0 || n > count {
+        bail!("selection out of range");
+    }
+    Ok(n - 1)
+}
+
+/// Resolve one pack directory inside a source that may hold several.
+fn choose_pack_dir(base: &Path) -> Result<PathBuf> {
+    let mut dirs = install::discover(base);
+    match dirs.len() {
+        0 => Err(btt::Error::NoPackInSource {
+            path: base.to_path_buf(),
+        }
+        .into()),
+        1 => Ok(dirs.remove(0)),
+        _ => {
+            println!("packs found in the source:");
+            for (i, d) in dirs.iter().enumerate() {
+                let rel = d.strip_prefix(base).unwrap_or(d);
+                println!("  {}. {}", i + 1, rel.display());
+            }
+            if !std::io::stdin().is_terminal() {
+                bail!("multiple packs in source; point --path or --dir at one of them");
+            }
+            let i = select_number(dirs.len())?;
+            Ok(dirs.remove(i))
+        }
+    }
+}
+
+fn print_review(staged: &install::Staged, prov: &install::Provenance, curated: bool) {
+    let m = &staged.pack.manifest;
+    println!();
+    println!(
+        "pack {} v{} — {}",
+        m.pack.name, m.pack.version, m.pack.description
+    );
+    println!("grammar: {}", grammar_kind(&staged.pack));
+    println!("targets: {}", m.detect.targets.join(", "));
+    let source = match prov.source.as_str() {
+        "curated" => format!(
+            "curated — {} @ {} (verified against digests in this btt build)",
+            prov.url.as_deref().unwrap_or("?"),
+            prov.reference.as_deref().unwrap_or("?")
+        ),
+        "git" => format!(
+            "{} @ {}",
+            prov.url.as_deref().unwrap_or("?"),
+            prov.commit.as_deref().unwrap_or("?")
+        ),
+        _ => "local path".to_string(),
+    };
+    println!("source: {source}");
+    print_file_table(&staged.files);
+    wasm_blob_warning(&staged.pack);
+    if !curated {
+        println!();
+        println!("review the pack contents:");
+        print_pack_text(staged);
+    }
+}
+
+/// Print the full text of every reviewable staged file — a lexical or
+/// query/template pack is one screen of text; the wasm blob (if any) is
+/// deliberately excluded and covered by the blob warning instead.
+fn print_pack_text(staged: &install::Staged) {
+    let wasm_rel = match &staged.pack.manifest.grammar.source {
+        pack::GrammarSource::Wasm(f) => Some(f.to_string_lossy().into_owned()),
+        pack::GrammarSource::Builtin(_) | pack::GrammarSource::Lexical => None,
+    };
+    for f in &staged.files {
+        if Some(&f.rel) == wasm_rel.as_ref() {
+            continue;
+        }
+        println!(
+            "--- {} {}",
+            f.rel,
+            "-".repeat(60_usize.saturating_sub(f.rel.len()))
+        );
+        match std::fs::read_to_string(staged.dir().join(&f.rel)) {
+            Ok(text) => print!("{text}"),
+            Err(e) => println!("(unreadable: {e})"),
+        }
+        println!();
+    }
+}
+
+/// An acquired install source: the pack directory to stage from, its
+/// provenance, the curated index entry when applicable, and the temp
+/// checkout (if any) kept alive — and cleaned up on drop — until staging
+/// has copied out of it.
+struct Acquired {
+    source_dir: PathBuf,
+    prov: install::Provenance,
+    curated: Option<install::IndexEntry>,
+    _checkout: Option<install::Checkout>,
+}
+
+fn acquire_path(path: &Path) -> Result<Acquired> {
+    let source_dir = if path.join("pack.toml").is_file() {
+        path.to_path_buf()
+    } else {
+        choose_pack_dir(path)?
+    };
+    Ok(Acquired {
+        source_dir,
+        prov: install::Provenance {
+            source: "path".to_string(),
+            url: None,
+            reference: None,
+            commit: None,
+        },
+        curated: None,
+        _checkout: None,
+    })
+}
+
+fn acquire_git(url: &str, reference: Option<&str>, subdir: Option<&str>) -> Result<Acquired> {
+    let co = install::fetch_git(url, reference)?;
+    let base = match subdir {
+        Some(sub) => {
+            let joined = co.dir().join(sub);
+            let canon = joined
+                .canonicalize()
+                .with_context(|| format!("--dir {sub}: not found in the repository"))?;
+            if !canon.starts_with(co.dir().canonicalize()?) {
+                bail!("--dir must name a directory inside the repository");
+            }
+            joined
+        }
+        None => co.dir().to_path_buf(),
+    };
+    let source_dir = if base.join("pack.toml").is_file() {
+        base
+    } else {
+        choose_pack_dir(&base)?
+    };
+    Ok(Acquired {
+        source_dir,
+        prov: install::Provenance {
+            source: "git".to_string(),
+            url: Some(url.to_string()),
+            reference: reference.map(ToString::to_string),
+            commit: Some(co.commit.clone()),
+        },
+        curated: None,
+        _checkout: Some(co),
+    })
+}
+
+/// Acquire from the curated index; `Ok(None)` when this build offers no
+/// curated packs (a message has been printed).
+fn acquire_curated(name: Option<&str>) -> Result<Option<Acquired>> {
+    let index = install::curated_index()?;
+    if index.packs.is_empty() {
+        println!(
+            "this btt build ships no curated packs yet; \
+             install with --git <url> or --path <dir>"
+        );
+        return Ok(None);
+    }
+    let mut packs = index.packs;
+    let entry = if let Some(n) = name {
+        let i = packs.iter().position(|p| p.name == n).ok_or_else(|| {
+            anyhow!(
+                "`{n}` is not in the curated index (available: {})",
+                packs
+                    .iter()
+                    .map(|p| p.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })?;
+        packs.swap_remove(i)
+    } else {
+        println!("curated packs (tag {}):", index.tag);
+        for (i, p) in packs.iter().enumerate() {
+            println!("  {}. {} [{}] — {}", i + 1, p.name, p.kind, p.description);
+        }
+        if !std::io::stdin().is_terminal() {
+            bail!("stdin is not a terminal; pass a pack name to install non-interactively");
+        }
+        packs.swap_remove(select_number(packs.len())?)
+    };
+    let url = env!("CARGO_PKG_REPOSITORY");
+    println!("fetching {url} at tag {} …", index.tag);
+    let co = install::fetch_git(url, Some(&index.tag))?;
+    Ok(Some(Acquired {
+        source_dir: co.dir().join(&entry.dir),
+        prov: install::Provenance {
+            source: "curated".to_string(),
+            url: Some(url.to_string()),
+            reference: Some(index.tag.clone()),
+            commit: Some(co.commit.clone()),
+        },
+        curated: Some(entry),
+        _checkout: Some(co),
+    }))
+}
+
+fn cmd_pack_install(args: &InstallArgs, root: &Path) -> Result<ExitCode> {
+    let dest = if args.project {
+        root.join(".btt/packs")
+    } else {
+        pack::user_install_root()
+            .context("cannot resolve the user pack directory (no home directory)")?
+    };
+
+    let acquired = if let Some(path) = &args.path {
+        acquire_path(path)?
+    } else if let Some(url) = &args.git {
+        acquire_git(url, args.r#ref.as_deref(), args.dir.as_deref())?
+    } else {
+        match acquire_curated(args.name.as_deref())? {
+            Some(a) => a,
+            None => return Ok(ExitCode::SUCCESS),
+        }
+    };
+
+    let staged = install::stage(&acquired.source_dir, &dest)?;
+    if let Some(entry) = &acquired.curated {
+        install::verify_curated(&staged, entry)?;
+    }
+    let curated = acquired.curated.is_some();
+    let prov = acquired.prov.clone();
+    let name = staged.name().to_string();
+    let version = staged.pack.manifest.pack.version.clone();
+
+    print_review(&staged, &prov, curated);
+    if pack::builtin_names().contains(&name) {
+        println!(
+            "warning: `{name}` is also a builtin pack; projects naming it in \
+             btt.toml will use this installed copy instead of the builtin"
+        );
+    }
+
+    let proceed = if args.yes {
+        true
+    } else if std::io::stdin().is_terminal() {
+        // Curated content is pre-verified; third-party defaults to no.
+        confirm(&format!("install `{name}`?"), curated)?
+    } else {
+        bail!("stdin is not a terminal; pass --yes to confirm the install non-interactively");
+    };
+    if !proceed {
+        println!("aborted; nothing installed");
+        return Ok(ExitCode::FAILURE);
+    }
+
+    install::write_receipt(&staged, &prov)?;
+    let installed = install::commit(staged, args.force)?;
+    println!("installed {name} v{version} to {}", installed.display());
+    println!("activate it by adding \"{name}\" to packs = [...] in btt.toml");
+    Ok(ExitCode::SUCCESS)
+}
+
+fn cmd_pack_rm(name: &str, project: bool, yes: bool, root: &Path) -> Result<ExitCode> {
+    if !pack::is_valid_name(name) {
+        bail!("invalid pack name `{name}`");
+    }
+    let roots = if project {
+        vec![root.join(".btt/packs")]
+    } else {
+        pack::user_pack_dirs()
+    };
+    let Some(packs_root) = roots
+        .iter()
+        .find(|r| r.join(name).symlink_metadata().is_ok())
+    else {
+        if pack::builtin_names().iter().any(|b| b == name) {
+            bail!("`{name}` is built into the btt binary and cannot be removed");
+        }
+        bail!(
+            "pack `{name}` is not installed in {}",
+            roots
+                .iter()
+                .map(|r| r.display().to_string())
+                .collect::<Vec<_>>()
+                .join(" or ")
+        );
+    };
+    let target = packs_root.join(name);
+    let version = pack::load_dir(&target)
+        .map(|p| format!(" v{}", p.manifest.pack.version))
+        .unwrap_or_default();
+    println!("will remove {}{version}", target.display());
+    let proceed = if yes {
+        true
+    } else if std::io::stdin().is_terminal() {
+        confirm("remove?", false)?
+    } else {
+        bail!("stdin is not a terminal; pass --yes to confirm the removal non-interactively");
+    };
+    if !proceed {
+        println!("aborted; nothing removed");
+        return Ok(ExitCode::FAILURE);
+    }
+    let removed = install::remove(packs_root, name)?;
+    println!("removed {}", removed.display());
+    if let Ok(p) = pack::load(name, root) {
+        println!("note: `{name}` still resolves from the {} source", p.origin);
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 const DEFAULT_CONFIG: &str = r#"# btt — branch tree testing (https://github.com/Maddiaa0/btt)

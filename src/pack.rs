@@ -350,7 +350,7 @@ impl Pack {
 /// values come from `pack.toml`, and packs are only "reviewable data" if
 /// the paths they name stay inside the pack (or, for target/output
 /// patterns, the tree file's directory).
-fn confine(pack: &str, field: &'static str, value: &str) -> Result<()> {
+pub(crate) fn confine(pack: &str, field: &'static str, value: &str) -> Result<()> {
     let safe = !value.is_empty()
         && Path::new(value)
             .components()
@@ -369,7 +369,7 @@ fn confine(pack: &str, field: &'static str, value: &str) -> Result<()> {
 /// Validate every path-like manifest field before any of them is used,
 /// plus cross-field consistency (a lexical pack needs its profile and
 /// nothing grammar-shaped; a grammar pack needs its query).
-fn validate(manifest: &Manifest) -> Result<()> {
+pub(crate) fn validate(manifest: &Manifest) -> Result<()> {
     let pack = &manifest.pack.name;
     if manifest.format != PACK_FORMAT_VERSION {
         return Err(Error::UnsupportedPackFormat {
@@ -635,11 +635,7 @@ fn load_embedded(dir: &Dir<'static>) -> Result<Pack> {
 pub fn load(name: &str, project_root: &Path) -> Result<Pack> {
     // The name is joined into filesystem paths below: a single normal
     // path component only, so `load("../../x")` cannot walk anywhere.
-    let mut components = Path::new(name).components();
-    if !matches!(
-        (components.next(), components.next()),
-        (Some(Component::Normal(_)), None)
-    ) {
+    if !is_valid_name(name) {
         return Err(Error::UnsafePath {
             pack: name.to_string(),
             field: "pack name",
@@ -720,6 +716,18 @@ pub fn available(project_root: &Path) -> Vec<(String, Origin)> {
     map.into_iter().collect()
 }
 
+/// True when `name` is safe to join into a packs directory: exactly one
+/// normal path component (`foo` — not `../foo`, `a/b`, `/abs`, or empty).
+/// Every consumer that joins a pack name onto a root must check this.
+#[must_use]
+pub fn is_valid_name(name: &str) -> bool {
+    let mut components = Path::new(name).components();
+    matches!(
+        (components.next(), components.next()),
+        (Some(Component::Normal(_)), None)
+    )
+}
+
 /// Names of the packs embedded in this binary.
 #[must_use]
 pub fn builtin_names() -> Vec<String> {
@@ -733,8 +741,19 @@ pub fn builtin_names() -> Vec<String> {
         .collect()
 }
 
-/// User-global pack directories, in priority order.
-fn user_pack_dirs() -> Vec<PathBuf> {
+/// The directory `btt pack install` writes to: the highest-priority
+/// user-global root (`$XDG_CONFIG_HOME/btt/packs`, default
+/// `~/.config/btt/packs`). The legacy `~/.btt/packs` is resolution-only —
+/// the installer never writes there. `None` when no home can be resolved.
+#[must_use]
+pub fn user_install_root() -> Option<PathBuf> {
+    user_pack_dirs().into_iter().next()
+}
+
+/// User-global pack directories, in priority order (XDG first, then the
+/// legacy `~/.btt/packs`).
+#[must_use]
+pub fn user_pack_dirs() -> Vec<PathBuf> {
     user_pack_dirs_from(
         std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
         std::env::home_dir(),

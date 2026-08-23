@@ -136,6 +136,11 @@ Packs carry independent `SemVer` versions, a manifest-format version, and a
 policy and maintainer workflow are documented in
 [docs/pack-releases.md](docs/pack-releases.md).
 
+`btt pack install` fetches a pack from the official repo (digest-pinned) or
+any git URL / local directory — it shows you the full pack text before
+copying anything, never runs pack code, and never activates a pack by
+itself. Design and threat model: [docs/pack-install.md](docs/pack-install.md).
+
 ## Configuration
 
 `btt.toml` at the repo root:
@@ -160,5 +165,6 @@ Missing tests are always errors, and `btt check` exits non-zero on errors.
 |---|---|
 | `btt check [paths] [-j N]` | diff every `.tree` against its test file (parallel; `-j` caps threads) |
 | `btt scaffold <tree>` | generate a skeleton (`--stdout`, `--force`, `--pack`) |
-| `btt packs` | list packs and where they resolve from |
+| `btt pack install [name\|--git\|--path]` | install a pack after review (curated installs are digest-verified) |
+| `btt pack list\|show\|rm` | inspect and manage installed packs (`btt packs` = `pack list`) |
 | `btt init [--skill]` | write `btt.toml` (+ Claude skill for agents) |

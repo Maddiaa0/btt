@@ -194,6 +194,86 @@ pub enum Error {
         path: PathBuf,
     },
 
+    /// An install-source file is a symlink, escapes the source directory,
+    /// or is not a regular file. The installer copies file contents only.
+    #[error(
+        "install: refusing {} — symlinks and special files are never copied",
+        path.display()
+    )]
+    InstallUnsafeFile {
+        /// The offending source path.
+        path: PathBuf,
+    },
+
+    /// An install-source file exceeds the installer's size cap.
+    #[error("install: {} is {size} bytes (cap {limit}); refusing", path.display())]
+    InstallTooLarge {
+        /// The oversized source file.
+        path: PathBuf,
+        /// Its size in bytes.
+        size: u64,
+        /// The cap it exceeded.
+        limit: u64,
+    },
+
+    /// The destination already holds a pack with this name.
+    #[error(
+        "pack `{name}` is already installed at {} (use --force to replace it)",
+        path.display()
+    )]
+    AlreadyInstalled {
+        /// The colliding pack name.
+        name: String,
+        /// The existing installation.
+        path: PathBuf,
+    },
+
+    /// A staged file does not match the digest pinned in the curated index.
+    #[error(
+        "pack `{name}`: `{file}` does not match the digest pinned in this btt build — \
+         refusing to install (possible supply-chain tampering)"
+    )]
+    DigestMismatch {
+        /// The pack being verified.
+        name: String,
+        /// The file (or file-set difference) that failed verification.
+        file: String,
+    },
+
+    /// A git command run by the installer failed.
+    #[error("git {args}: {detail}")]
+    Git {
+        /// The arguments git was invoked with.
+        args: String,
+        /// Captured stderr, or the spawn error.
+        detail: String,
+    },
+
+    /// An install source contains no `pack.toml`.
+    #[error("no pack.toml found under {}", path.display())]
+    NoPackInSource {
+        /// The searched source directory.
+        path: PathBuf,
+    },
+
+    /// Refusing to remove a path that is not an installed pack directory.
+    #[error("refusing to remove {}: {reason}", path.display())]
+    NotRemovable {
+        /// The path that was asked to be removed.
+        path: PathBuf,
+        /// Why removal was refused.
+        reason: &'static str,
+    },
+
+    /// An install receipt failed to serialize.
+    #[error("receipt for pack `{pack}`: {message}")]
+    Receipt {
+        /// The pack whose receipt failed.
+        pack: String,
+        /// The underlying serialization error, stringified.
+        message: String,
+    },
+
     /// A pack's scaffold template failed to compile or render.
     #[error("pack `{pack}`: template error: {source}")]
     Template {

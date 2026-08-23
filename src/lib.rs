@@ -5,6 +5,7 @@ pub mod check;
 pub mod config;
 pub mod error;
 pub mod extract;
+pub mod install;
 mod lexical;
 pub mod mapping;
 pub mod pack;

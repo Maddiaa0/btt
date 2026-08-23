@@ -56,6 +56,24 @@ pub enum Error {
         value: String,
     },
 
+    /// A pack manifest is internally inconsistent (cross-field rules).
+    #[error("pack `{pack}`: {message}")]
+    Manifest {
+        /// The pack with the inconsistent manifest.
+        pack: String,
+        /// What is inconsistent.
+        message: String,
+    },
+
+    /// Lexical extraction could not account for the source file.
+    #[error("pack `{pack}`: lexical extraction: {message}")]
+    Lexical {
+        /// The pack whose profile was scanning.
+        pack: String,
+        /// What the scanner could not account for.
+        message: String,
+    },
+
     /// A target pattern that forward and reverse routing would disagree on.
     #[error(
         "pack `{pack}`: target pattern `{pattern}` must contain exactly one {{stem}} and no directory separators"

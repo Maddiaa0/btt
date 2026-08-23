@@ -116,6 +116,7 @@ dependencies = [
  "include_dir",
  "minijinja",
  "rayon",
+ "regex",
  "serde",
  "thiserror",
  "toml",

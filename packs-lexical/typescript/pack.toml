@@ -1,0 +1,61 @@
+# Lexical twin of the builtin typescript pack: no grammar, no blob — the
+# [lexical] profile below is the entire language definition. Validated by
+# tests/lexical.rs, which differentially fuzzes it against the native
+# tree-sitter extraction.
+
+[pack]
+name = "typescript-lexical"
+version = "0.1.0"
+description = "TypeScript/JavaScript tests via lexical scanning (no grammar): describe blocks for branches, it/test for leaves"
+
+[detect]
+targets = [
+  "{stem}.test.ts",
+  "{stem}.spec.ts",
+  "{stem}.test.mts",
+  "{stem}.test.js",
+  "{stem}.spec.js",
+]
+
+[grammar]
+source = "lexical"
+
+[extract]
+name_syntax = "js-string"
+
+[lexical]
+line_comment = "//"
+block_comment = ["/*", "*/"]
+strings = [
+  { delim = '"', escape = '\' },
+  { delim = "'", escape = '\' },
+  { delim = "`", escape = '\' },
+]
+nest = [["(", ")"], ["{", "}"]]
+
+# Openers mirror the native pack's queries/tests.scm patterns. The title
+# capture includes its quotes; name_syntax = "js-string" decodes it — the
+# same decoder the tree-sitter path uses. The trailing [,)] rejects
+# non-literal titles ("a" + x), which the native query's first-argument
+# anchor also rejects.
+[lexical.block]
+open = '''(?:^|[^\w$.])(?<kw>(?:describe|suite)(?:\.\w+)?|(?:it|test)\.describe)\s*\(\s*(?<name>"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*[,)]'''
+
+[lexical.test]
+open = '''(?:^|[^\w$.])(?<kw>(?:it|test)(?:\.(?:only|skip|fails|todo|fixme|slow|concurrent|sequential))?)\s*\(\s*(?<name>"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*[,)]'''
+
+[mapping]
+# The tree root must appear as a top-level describe block.
+root = "block"
+
+[mapping.block]
+case = "verbatim"
+
+[mapping.test]
+strip_prefix = "it "
+case = "verbatim"
+
+[scaffold]
+template = "templates/test.jinja"
+output = "{stem}.test.ts"
+indent = "  "

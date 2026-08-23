@@ -6,17 +6,22 @@
 
 use serde::Deserialize;
 
+/// Case transform applied to node text when deriving an identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Case {
     /// Keep the text as-is (trimmed). Used by block-style runners (vitest).
     #[default]
     Verbatim,
+    /// `snake_case`, punctuation dropped.
     Snake,
+    /// `camelCase`, punctuation dropped.
     Camel,
+    /// `PascalCase`, punctuation dropped.
     Pascal,
 }
 
+/// How one category of spec node maps to an identifier.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct NameRule {
     /// Prefix to strip from the node text before transforming, e.g. "it ".
@@ -25,25 +30,27 @@ pub struct NameRule {
     /// Prefix to prepend to the transformed name, e.g. "test_".
     #[serde(default)]
     pub add_prefix: Option<String>,
+    /// Case transform for the remaining text.
     #[serde(default)]
     pub case: Case,
 }
 
 impl NameRule {
     /// Apply this rule to spec node text, producing the expected identifier.
+    #[must_use]
     pub fn apply(&self, text: &str) -> String {
         let mut t = text.trim();
         if let Some(p) = &self.strip_prefix
-            && let Some(stripped) = strip_prefix_ci(t, p) {
-                t = stripped;
-            }
+            && let Some(stripped) = strip_prefix_ci(t, p)
+        {
+            t = stripped;
+        }
         let out = match self.case {
             Case::Verbatim => t.trim().to_string(),
-            Case::Snake => words(t).join("_").to_lowercase(),
+            Case::Snake => words(t).collect::<Vec<_>>().join("_").to_lowercase(),
             Case::Camel => {
-                let ws = words(t);
                 let mut s = String::new();
-                for (i, w) in ws.iter().enumerate() {
+                for (i, w) in words(t).enumerate() {
                     if i == 0 {
                         s.push_str(&w.to_lowercase());
                     } else {
@@ -52,7 +59,7 @@ impl NameRule {
                 }
                 s
             }
-            Case::Pascal => words(t).iter().map(|w| capitalize(w)).collect(),
+            Case::Pascal => words(t).map(capitalize).collect(),
         };
         match &self.add_prefix {
             Some(p) => format!("{p}{out}"),
@@ -61,9 +68,10 @@ impl NameRule {
     }
 }
 
+/// Case-insensitive `strip_prefix` (ASCII case folding, boundary-safe).
 fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
     let n = prefix.len();
-    if s.len() >= n && s[..n].eq_ignore_ascii_case(prefix) {
+    if s.len() >= n && s.is_char_boundary(n) && s[..n].eq_ignore_ascii_case(prefix) {
         Some(&s[n..])
     } else {
         None
@@ -71,11 +79,8 @@ fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
 }
 
 /// Split node text into identifier-safe words, dropping punctuation.
-fn words(t: &str) -> Vec<String> {
-    t.split(|c: char| !c.is_alphanumeric())
-        .filter(|w| !w.is_empty())
-        .map(|w| w.to_string())
-        .collect()
+fn words(t: &str) -> impl Iterator<Item = &str> {
+    t.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty())
 }
 
 fn capitalize(w: &str) -> String {
@@ -98,8 +103,10 @@ pub enum RootMapping {
     Block,
 }
 
+/// A pack's complete node-text-to-identifier configuration.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Mapping {
+    /// How the root line maps onto the file.
     #[serde(default)]
     pub root: RootMapping,
     /// Rule for condition nodes -> block names.
@@ -157,6 +164,18 @@ mod tests {
                 ..Default::default()
             };
             assert_eq!(rule.apply("when iterating"), "when iterating");
+        }
+
+        #[test]
+        fn survives_multibyte_text_at_the_boundary() {
+            let rule = NameRule {
+                strip_prefix: Some("it ".into()),
+                case: Case::Snake,
+                ..Default::default()
+            };
+            // "it—does" has a multi-byte char straddling the prefix length;
+            // must not panic, and the prefix must not match.
+            assert_eq!(rule.apply("it—does thing"), "it_does_thing");
         }
     }
 

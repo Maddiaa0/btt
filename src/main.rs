@@ -1,9 +1,12 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
+use btt::check::Finding;
 use btt::config::{self, Level};
+use btt::extract::ActualKind;
 use btt::runner::{self, Target};
 use btt::{check, pack, scaffold, tree};
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 
 #[derive(Parser)]
 #[command(name = "btt", version, about = "Branch tree testing, for any language")]
@@ -46,26 +49,26 @@ enum Command {
     },
 }
 
-fn main() {
+fn main() -> ExitCode {
     let cli = Cli::parse();
     match run(cli) {
-        Ok(code) => std::process::exit(code),
+        Ok(code) => code,
         Err(err) => {
             eprintln!("error: {err:#}");
-            std::process::exit(2);
+            ExitCode::from(2)
         }
     }
 }
 
-fn run(cli: Cli) -> Result<i32> {
+fn run(cli: Cli) -> Result<ExitCode> {
     let cwd = std::env::current_dir().context("getting cwd")?;
     let root = config::find_project_root(&cwd);
     let cfg = config::load(&root)?;
 
     match cli.command {
-        Command::Check { paths } => cmd_check(paths, &root, &cfg),
+        Command::Check { paths } => cmd_check(&paths, &root, &cfg),
         Command::Scaffold { tree, pack, output, force, stdout } => {
-            cmd_scaffold(tree, pack, output, force, stdout, &root, &cfg)
+            cmd_scaffold(&tree, pack, output, force, stdout, &root, &cfg)
         }
         Command::Packs => cmd_packs(&root),
         Command::Init { skill } => cmd_init(&root, skill),
@@ -74,22 +77,22 @@ fn run(cli: Cli) -> Result<i32> {
 
 /// Load the project's configured packs, or every available pack when the
 /// project doesn't pin any.
-fn load_packs(root: &std::path::Path, cfg: &config::ProjectConfig) -> Result<Vec<pack::Pack>> {
+fn load_packs(root: &Path, cfg: &config::ProjectConfig) -> Result<Vec<pack::Pack>> {
     let names: Vec<String> = if cfg.project.packs.is_empty() {
-        pack::available(root).into_iter().map(|(n, _)| n).collect()
+        pack::available(root).into_iter().map(|(name, _)| name).collect()
     } else {
         cfg.project.packs.clone()
     };
-    names.iter().map(|n| pack::load(n, root)).collect()
+    Ok(names.iter().map(|n| pack::load(n, root)).collect::<btt::Result<_>>()?)
 }
 
-fn cmd_check(paths: Vec<PathBuf>, root: &std::path::Path, cfg: &config::ProjectConfig) -> Result<i32> {
+fn cmd_check(paths: &[PathBuf], root: &Path, cfg: &config::ProjectConfig) -> Result<ExitCode> {
     let packs = load_packs(root, cfg)?;
-    let search = if paths.is_empty() { vec![root.to_path_buf()] } else { paths };
+    let search = if paths.is_empty() { vec![root.to_path_buf()] } else { paths.to_vec() };
     let tree_files = runner::find_tree_files(&search);
     if tree_files.is_empty() {
         println!("no .tree files found");
-        return Ok(0);
+        return Ok(ExitCode::SUCCESS);
     }
 
     let mut errors = 0usize;
@@ -108,98 +111,89 @@ fn cmd_check(paths: Vec<PathBuf>, root: &std::path::Path, cfg: &config::ProjectC
             Target::Found { pack, path } => {
                 let reported = runner::check_file(pack, tree_path, &path, &cfg.check)?;
                 if reported.is_empty() {
-                    println!("✓ {} ({})", rel.display(), path.file_name().unwrap().to_string_lossy());
+                    let shown = path.file_name().unwrap_or(path.as_os_str());
+                    println!("✓ {} ({})", rel.display(), shown.to_string_lossy());
                     continue;
                 }
                 println!("✗ {} → {}", rel.display(), path.display());
                 for r in &reported {
-                    let (label, loc) = describe(&r.finding, rel, &path);
-                    let sev = match r.level {
-                        Level::Error => "error",
-                        Level::Warn => "warn ",
-                        Level::Ignore => unreachable!(),
+                    let sev = if r.level == Level::Error {
+                        errors += 1;
+                        "error"
+                    } else {
+                        warnings += 1;
+                        "warn "
                     };
-                    match r.level {
-                        Level::Error => errors += 1,
-                        _ => warnings += 1,
-                    }
-                    println!("    {sev} {label} {loc}");
+                    println!("    {sev} {}", describe(&r.finding, rel, &path));
                 }
             }
         }
     }
     println!(
-        "\n{} tree file(s), {} error(s), {} warning(s)",
-        tree_files.len(),
-        errors,
-        warnings
+        "\n{} tree file(s), {errors} error(s), {warnings} warning(s)",
+        tree_files.len()
     );
-    Ok(if errors > 0 { 1 } else { 0 })
+    Ok(if errors > 0 { ExitCode::FAILURE } else { ExitCode::SUCCESS })
 }
 
-fn describe(
-    finding: &check::Finding,
-    tree_rel: &std::path::Path,
-    target: &std::path::Path,
-) -> (String, String) {
-    use check::FindingKind::*;
-    let label = match finding.kind {
-        MissingBlock => format!("missing block `{}`", finding.path),
-        MissingTest => format!("missing test  `{}`", finding.path),
-        ExtraBlock => format!("extra block   `{}`", finding.path),
-        ExtraTest => format!("extra test    `{}`", finding.path),
-        OutOfOrder => format!("order differs under `{}`", finding.path),
+fn describe(finding: &Finding, tree_rel: &Path, target: &Path) -> String {
+    let noun = |kind: ActualKind| match kind {
+        ActualKind::Block => "block",
+        ActualKind::Test => "test ",
     };
-    let loc = match (finding.spec_line, finding.target_line) {
-        (Some(l), _) => format!("({}:{})", tree_rel.display(), l),
-        (_, Some(l)) => format!("({}:{})", target.display(), l),
-        _ => String::new(),
-    };
-    (label, loc)
+    match finding {
+        Finding::Missing { kind, path, spec_line } => {
+            format!("missing {} `{path}` ({}:{spec_line})", noun(*kind), tree_rel.display())
+        }
+        Finding::Extra { kind, path, target_line } => {
+            format!("extra   {} `{path}` ({}:{target_line})", noun(*kind), target.display())
+        }
+        Finding::OutOfOrder { path } => format!("order differs under `{path}`"),
+    }
 }
 
 fn cmd_scaffold(
-    tree_path: PathBuf,
+    tree_path: &Path,
     pack_name: Option<String>,
     output: Option<PathBuf>,
     force: bool,
     to_stdout: bool,
-    root: &std::path::Path,
+    root: &Path,
     cfg: &config::ProjectConfig,
-) -> Result<i32> {
+) -> Result<ExitCode> {
     let pack = match pack_name {
         Some(name) => pack::load(&name, root)?,
         None => {
             let mut packs = cfg.project.packs.clone();
             if packs.is_empty() {
-                packs = pack::available(root).into_iter().map(|(n, _)| n).collect();
+                packs = pack::available(root).into_iter().map(|(name, _)| name).collect();
             }
-            if packs.len() == 1 {
-                pack::load(&packs[0], root)?
-            } else {
-                bail!(
+            match packs.as_slice() {
+                [only] => pack::load(only, root)?,
+                _ => bail!(
                     "multiple packs available ({}); pick one with --pack",
                     packs.join(", ")
-                );
+                ),
             }
         }
     };
 
-    let spec_src = std::fs::read_to_string(&tree_path)
+    let spec_src = std::fs::read_to_string(tree_path)
         .with_context(|| format!("reading {}", tree_path.display()))?;
-    let trees = tree::parse(&spec_src)?;
+    let trees = tree::parse(&spec_src)
+        .map_err(|source| btt::Error::Parse { path: tree_path.to_path_buf(), source })?;
     let expected = check::expected_from_spec(&trees, &pack.manifest.mapping);
     let stem = tree_path.file_stem().and_then(|s| s.to_str()).unwrap_or("test");
     let rendered = scaffold::render(&pack, &expected, stem)?;
 
     if to_stdout {
         print!("{rendered}");
-        return Ok(0);
+        return Ok(ExitCode::SUCCESS);
     }
     let out_path = output.unwrap_or_else(|| {
         tree_path
             .parent()
-            .unwrap_or(std::path::Path::new("."))
+            .unwrap_or(Path::new("."))
             .join(pack.manifest.scaffold.output.replace("{stem}", stem))
     });
     if out_path.exists() && !force {
@@ -216,10 +210,10 @@ fn cmd_scaffold(
         runner::count_tests(&expected),
         tree_path.display()
     );
-    Ok(0)
+    Ok(ExitCode::SUCCESS)
 }
 
-fn cmd_packs(root: &std::path::Path) -> Result<i32> {
+fn cmd_packs(root: &Path) -> Result<ExitCode> {
     for (name, origin) in pack::available(root) {
         match pack::load(&name, root) {
             Ok(p) => println!(
@@ -229,7 +223,7 @@ fn cmd_packs(root: &std::path::Path) -> Result<i32> {
             Err(e) => println!("{name}  [{origin}]  (broken: {e})"),
         }
     }
-    Ok(0)
+    Ok(ExitCode::SUCCESS)
 }
 
 const DEFAULT_CONFIG: &str = r#"# btt — branch tree testing (https://github.com/Maddiaa0/btt)
@@ -246,7 +240,7 @@ extra = "warn"
 order = "warn"
 "#;
 
-fn cmd_init(root: &std::path::Path, skill: bool) -> Result<i32> {
+fn cmd_init(root: &Path, skill: bool) -> Result<ExitCode> {
     let cfg_path = root.join("btt.toml");
     if cfg_path.exists() {
         println!("btt.toml already exists, leaving it untouched");
@@ -261,7 +255,9 @@ fn cmd_init(root: &std::path::Path, skill: bool) -> Result<i32> {
         std::fs::write(&skill_path, include_str!("../assets/SKILL.md"))?;
         println!("wrote {}", skill_path.display());
     } else {
-        println!("tip: `btt init --skill` writes a Claude skill teaching agents the tree-first workflow");
+        println!(
+            "tip: `btt init --skill` writes a Claude skill teaching agents the tree-first workflow"
+        );
     }
-    Ok(0)
+    Ok(ExitCode::SUCCESS)
 }

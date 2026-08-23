@@ -4,6 +4,7 @@ mapping rules
 │   └── it drops punctuation
 ├── when a strip prefix is configured
 │   ├── it removes it case insensitively
-│   └── it leaves other text untouched
+│   ├── it leaves other text untouched
+│   └── it survives multibyte text at the boundary
 └── when applying pascal case
     └── it capitalizes each word

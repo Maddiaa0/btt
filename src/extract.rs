@@ -15,40 +15,37 @@
 //! languages (describe callbacks) and item-based ones (mods) without any
 //! language-specific logic in the core.
 
+use crate::error::{Error, Result};
 use crate::pack::{self, Pack};
-use anyhow::{bail, Context, Result};
 use std::path::Path;
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Whether an extracted node is a nesting block or a test definition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActualKind {
+    /// A nesting construct (`mod`, `describe`).
     Block,
+    /// A test definition (`#[test] fn`, `it(...)`).
     Test,
 }
 
+/// One node of the structure actually present in a test file.
 #[derive(Debug, Clone)]
 pub struct ActualNode {
+    /// Block or test.
     pub kind: ActualKind,
     /// The identifier / title as written in the source.
     pub name: String,
     /// 1-based line of the definition.
     pub line: usize,
+    /// Nested nodes (always empty for tests).
     pub children: Vec<ActualNode>,
 }
 
 impl ActualNode {
-    fn from_raw(raw: Raw, all: &[Raw]) -> ActualNode {
-        let children = all
-            .iter()
-            .filter(|c| c.parent_idx == Some(raw.idx))
-            .cloned()
-            .map(|c| ActualNode::from_raw(c, all))
-            .collect();
-        ActualNode { kind: raw.kind, name: raw.name, line: raw.line, children }
-    }
-
     /// Drop blocks that contain no tests anywhere below them (helper mods,
     /// non-test describes) so they don't show up as noise in diffs.
+    #[must_use]
     pub fn prune_empty_blocks(nodes: Vec<ActualNode>) -> Vec<ActualNode> {
         nodes
             .into_iter()
@@ -56,142 +53,125 @@ impl ActualNode {
                 ActualKind::Test => Some(n),
                 ActualKind::Block => {
                     n.children = Self::prune_empty_blocks(n.children);
-                    if n.children.is_empty() {
-                        None
-                    } else {
-                        Some(n)
-                    }
+                    if n.children.is_empty() { None } else { Some(n) }
                 }
             })
             .collect()
     }
 }
 
-#[derive(Debug, Clone)]
-struct Raw {
-    idx: usize,
+/// A captured definition, before nesting is derived.
+#[derive(Debug)]
+struct Capture {
     kind: ActualKind,
     name: String,
     line: usize,
     start: usize,
     end: usize,
-    parent_idx: Option<usize>,
 }
 
 /// Parse `source` with the pack's grammar and return the top-level actual
 /// nodes (already pruned of test-free blocks).
+///
+/// # Errors
+///
+/// Fails if the pack's grammar is unavailable, its query does not compile or
+/// lacks the required captures, or tree-sitter cannot parse the source.
 pub fn extract(pack: &Pack, target: &Path, source: &str) -> Result<Vec<ActualNode>> {
     let language = pack::language_for(pack, target)?;
     let mut parser = Parser::new();
-    parser.set_language(&language).context("setting grammar")?;
+    parser.set_language(&language)?;
     let tree = parser
         .parse(source, None)
-        .with_context(|| format!("parsing {}", target.display()))?;
+        .ok_or_else(|| Error::SourceParse { path: target.to_path_buf() })?;
 
-    let query = Query::new(&language, &pack.query)
-        .with_context(|| format!("compiling query for pack `{}`", pack.name()))?;
+    let query = Query::new(&language, &pack.query).map_err(|source| Error::Query {
+        pack: pack.name().to_string(),
+        source: Box::new(source),
+    })?;
 
     let idx_of = |cap: &str| query.capture_index_for_name(cap);
-    let (Some(block_i), Some(block_name_i), Some(test_i), Some(test_name_i)) = (
-        idx_of("block"),
-        idx_of("block.name"),
-        idx_of("test"),
-        idx_of("test.name"),
-    ) else {
-        bail!(
-            "pack `{}`: query must define @block, @block.name, @test, @test.name",
-            pack.name()
-        );
+    let (Some(block_i), Some(block_name_i), Some(test_i), Some(test_name_i)) =
+        (idx_of("block"), idx_of("block.name"), idx_of("test"), idx_of("test.name"))
+    else {
+        return Err(Error::MissingCaptures { pack: pack.name().to_string() });
     };
     let marker_i = idx_of("test.marker");
     if pack.manifest.extract.test_requires_marker && marker_i.is_none() {
-        bail!(
-            "pack `{}`: test_requires_marker is set but the query has no @test.marker",
-            pack.name()
-        );
+        return Err(Error::MissingMarkerCapture { pack: pack.name().to_string() });
     }
 
-    let mut raws: Vec<Raw> = Vec::new();
-    let mut marker_ends: Vec<(usize, usize)> = Vec::new(); // (start, end) byte ranges
+    let mut captures: Vec<Capture> = Vec::new();
+    let mut marker_ranges: Vec<(usize, usize)> = Vec::new(); // (start, end) bytes
 
     let mut cursor = QueryCursor::new();
     let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
     while let Some(m) = matches.next() {
         let node_for = |i: u32| m.captures.iter().find(|c| c.index == i).map(|c| c.node);
         if let Some(n) = node_for(block_i)
-            && let Some(name_node) = node_for(block_name_i) {
-                push_raw(&mut raws, ActualKind::Block, n, name_node, source);
-            }
+            && let Some(name) = node_for(block_name_i)
+        {
+            captures.push(capture(ActualKind::Block, n, name, source));
+        }
         if let Some(n) = node_for(test_i)
-            && let Some(name_node) = node_for(test_name_i) {
-                push_raw(&mut raws, ActualKind::Test, n, name_node, source);
-            }
+            && let Some(name) = node_for(test_name_i)
+        {
+            captures.push(capture(ActualKind::Test, n, name, source));
+        }
         if let Some(i) = marker_i
-            && let Some(n) = node_for(i) {
-                marker_ends.push((n.start_byte(), n.end_byte()));
-            }
+            && let Some(n) = node_for(i)
+        {
+            marker_ranges.push((n.start_byte(), n.end_byte()));
+        }
     }
 
-    // Deduplicate (a node can appear in multiple query matches).
-    raws.sort_by_key(|r| (r.start, std::cmp::Reverse(r.end)));
-    raws.dedup_by_key(|r| (r.start, r.end, r.kind.clone()));
+    // Sort into pre-order (parents before children) and deduplicate: a node
+    // can appear in multiple query matches.
+    captures.sort_by_key(|c| (c.start, std::cmp::Reverse(c.end)));
+    captures.dedup_by_key(|c| (c.start, c.end, c.kind));
 
     if pack.manifest.extract.test_requires_marker {
-        raws.retain(|r| {
-            r.kind != ActualKind::Test || has_marker(&tree.root_node(), r, &marker_ends)
+        captures.retain(|c| {
+            c.kind != ActualKind::Test || has_marker(tree.root_node(), c, &marker_ranges)
         });
     }
 
-    // idx values must match final positions — parent_idx links rely on it.
-    for (i, r) in raws.iter_mut().enumerate() {
-        r.idx = i;
-    }
-
-    // Containment nesting: parent = innermost captured block strictly
-    // containing the node. raws is sorted by (start asc, end desc), so a
-    // simple stack walk assigns parents in one pass.
-    let mut stack: Vec<usize> = Vec::new();
-    for i in 0..raws.len() {
-        while let Some(&top) = stack.last() {
-            let t = &raws[top];
-            let contained = raws[i].start >= t.start && raws[i].end <= t.end;
-            if contained {
-                break;
-            }
-            stack.pop();
-        }
-        raws[i].parent_idx = stack.last().copied();
-        if raws[i].kind == ActualKind::Block {
-            stack.push(i);
-        }
-    }
-
-    let top: Vec<ActualNode> = raws
-        .iter()
-        .filter(|r| r.parent_idx.is_none())
-        .cloned()
-        .map(|r| ActualNode::from_raw(r, &raws))
-        .collect();
+    // In pre-order, a block's descendants are exactly the following captures
+    // whose start lies before the block's end, so one cursor pass builds the
+    // whole forest.
+    let mut i = 0;
+    let top = build_nodes(&captures, &mut i, usize::MAX);
     Ok(ActualNode::prune_empty_blocks(top))
 }
 
-fn push_raw(raws: &mut Vec<Raw>, kind: ActualKind, node: Node, name_node: Node, source: &str) {
-    let name = source[name_node.byte_range()].to_string();
-    raws.push(Raw {
-        idx: 0,
+fn build_nodes(captures: &[Capture], i: &mut usize, parent_end: usize) -> Vec<ActualNode> {
+    let mut out = Vec::new();
+    while *i < captures.len() && captures[*i].start < parent_end {
+        let c = &captures[*i];
+        *i += 1;
+        let children = match c.kind {
+            ActualKind::Block => build_nodes(captures, i, c.end),
+            ActualKind::Test => Vec::new(),
+        };
+        out.push(ActualNode { kind: c.kind, name: c.name.clone(), line: c.line, children });
+    }
+    out
+}
+
+fn capture(kind: ActualKind, node: Node, name_node: Node, source: &str) -> Capture {
+    Capture {
         kind,
-        name,
+        name: source[name_node.byte_range()].to_string(),
         line: node.start_position().row + 1,
         start: node.start_byte(),
         end: node.end_byte(),
-        parent_idx: None,
-    });
+    }
 }
 
 /// A test has a marker if, walking backwards through its previous named
 /// siblings, we hit a marker range before hitting any non-marker,
 /// non-comment, non-attribute node.
-fn has_marker(root: &Node, test: &Raw, marker_ends: &[(usize, usize)]) -> bool {
+fn has_marker(root: Node, test: &Capture, marker_ranges: &[(usize, usize)]) -> bool {
     let Some(mut node) = root.descendant_for_byte_range(test.start, test.end) else {
         return false;
     };
@@ -207,7 +187,7 @@ fn has_marker(root: &Node, test: &Raw, marker_ends: &[(usize, usize)]) -> bool {
     }
     let mut prev = node.prev_named_sibling();
     while let Some(p) = prev {
-        if marker_ends.contains(&(p.start_byte(), p.end_byte())) {
+        if marker_ranges.contains(&(p.start_byte(), p.end_byte())) {
             return true;
         }
         let kind = p.kind();

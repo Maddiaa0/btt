@@ -18,105 +18,163 @@
 //! (branches); nodes starting with `it` are actions (leaves). Multiple trees
 //! in one file are separated by blank lines.
 
-use anyhow::{bail, Result};
+/// Why a `.tree` file failed to parse.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum ParseError {
+    /// A branch line appeared before any root line.
+    #[error("line {line}: branch node before any root line")]
+    BranchBeforeRoot {
+        /// 1-based line number.
+        line: usize,
+    },
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+    /// An `it` node was given children.
+    #[error("line {line}: `it` nodes cannot have children (parent at line {parent_line})")]
+    ActionWithChildren {
+        /// 1-based line number of the child.
+        line: usize,
+        /// 1-based line number of the offending `it` parent.
+        parent_line: usize,
+    },
+
+    /// A node is indented more than one level past its parent.
+    #[error("line {line}: indentation jumps from depth {from} to {to}")]
+    DepthJump {
+        /// 1-based line number.
+        line: usize,
+        /// Depth of the deepest open node.
+        from: usize,
+        /// Depth the line claimed.
+        to: usize,
+    },
+
+    /// A node does not start with `when`, `given`, or `it`.
+    #[error("line {line}: node must start with `when`, `given`, or `it`: {text:?}")]
+    UnknownKeyword {
+        /// 1-based line number.
+        line: usize,
+        /// The offending node text.
+        text: String,
+    },
+
+    /// A line's box-drawing prefix is not well formed.
+    #[error("line {line}: malformed tree prefix: {text:?}")]
+    MalformedPrefix {
+        /// 1-based line number.
+        line: usize,
+        /// The full offending line.
+        text: String,
+    },
+
+    /// The file contains no trees at all.
+    #[error("no trees found in file")]
+    Empty,
+}
+
+/// Whether a spec node is a branch or a leaf.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeKind {
+    /// A `when …` / `given …` branch.
     Condition,
+    /// An `it …` leaf describing one assertion.
     Action,
 }
 
+/// One node of a parsed spec tree.
 #[derive(Debug, Clone)]
 pub struct SpecNode {
+    /// Branch or leaf.
     pub kind: NodeKind,
     /// Full node text, e.g. "when the key is present" or "it returns none".
     pub text: String,
-    /// 1-based line number in the .tree file.
+    /// 1-based line number in the `.tree` file.
     pub line: usize,
+    /// Child nodes (always empty for actions).
     pub children: Vec<SpecNode>,
 }
 
+/// One tree from a `.tree` file.
 #[derive(Debug, Clone)]
 pub struct SpecTree {
     /// Root line text, e.g. "HashMap".
     pub root: String,
+    /// 1-based line number of the root line.
     pub line: usize,
+    /// Top-level nodes under the root.
     pub children: Vec<SpecNode>,
 }
 
 /// Parse the contents of a `.tree` file into one or more spec trees.
-pub fn parse(source: &str) -> Result<Vec<SpecTree>> {
+///
+/// # Errors
+///
+/// Returns a [`ParseError`] describing the offending line if the file is
+/// malformed, or [`ParseError::Empty`] if it contains no trees.
+pub fn parse(source: &str) -> Result<Vec<SpecTree>, ParseError> {
     let mut trees: Vec<SpecTree> = Vec::new();
     // Stack of (depth, node) for the tree currently being built.
     let mut stack: Vec<(usize, SpecNode)> = Vec::new();
 
     for (idx, raw) in source.lines().enumerate() {
-        let lineno = idx + 1;
-        let line = raw.trim_end();
-        if line.trim().is_empty() {
-            flush_tree(&mut trees, &mut stack)?;
+        let line = idx + 1;
+        let text = raw.trim_end();
+        if text.trim().is_empty() {
+            flush_tree(&mut trees, &mut stack);
             continue;
         }
-        if line.trim_start().starts_with("//") {
+        if text.trim_start().starts_with("//") {
             continue;
         }
 
-        let (depth, text) = parse_line(line, lineno)?;
+        let (depth, node_text) = parse_line(text, line)?;
 
         if depth == 0 {
-            flush_tree(&mut trees, &mut stack)?;
-            trees.push(SpecTree { root: text, line: lineno, children: Vec::new() });
+            flush_tree(&mut trees, &mut stack);
+            trees.push(SpecTree { root: node_text, line, children: Vec::new() });
             continue;
         }
 
         if trees.is_empty() {
-            bail!("line {lineno}: branch node before any root line");
+            return Err(ParseError::BranchBeforeRoot { line });
         }
-        let kind = classify(&text, lineno)?;
-        let node = SpecNode { kind, text, line: lineno, children: Vec::new() };
+        let kind = classify(&node_text, line)?;
+        let node = SpecNode { kind, text: node_text, line, children: Vec::new() };
 
         // Pop the stack down to this node's parent depth.
-        while let Some((d, _)) = stack.last() {
-            if *d >= depth {
-                let (_, done) = stack.pop().unwrap();
-                attach(&mut trees, &mut stack, done);
-            } else {
-                break;
-            }
+        while stack.last().is_some_and(|(d, _)| *d >= depth) {
+            let (_, done) = stack.pop().expect("checked non-empty");
+            attach(&mut trees, &mut stack, done);
         }
         match stack.last() {
             Some((d, parent)) => {
                 if depth != d + 1 {
-                    bail!("line {lineno}: indentation jumps from depth {d} to {depth}");
+                    return Err(ParseError::DepthJump { line, from: *d, to: depth });
                 }
                 if parent.kind == NodeKind::Action {
-                    bail!(
-                        "line {lineno}: `it` nodes cannot have children (parent at line {})",
-                        parent.line
-                    );
+                    return Err(ParseError::ActionWithChildren { line, parent_line: parent.line });
                 }
             }
             None => {
                 if depth != 1 {
-                    bail!("line {lineno}: indentation jumps from root to depth {depth}");
+                    return Err(ParseError::DepthJump { line, from: 0, to: depth });
                 }
             }
         }
         stack.push((depth, node));
     }
-    flush_tree(&mut trees, &mut stack)?;
+    flush_tree(&mut trees, &mut stack);
 
     if trees.is_empty() {
-        bail!("no trees found in file");
+        return Err(ParseError::Empty);
     }
     Ok(trees)
 }
 
-fn flush_tree(trees: &mut [SpecTree], stack: &mut Vec<(usize, SpecNode)>) -> Result<()> {
+fn flush_tree(trees: &mut [SpecTree], stack: &mut Vec<(usize, SpecNode)>) {
     while let Some((_, node)) = stack.pop() {
         attach(trees, stack, node);
     }
-    Ok(())
 }
 
 fn attach(trees: &mut [SpecTree], stack: &mut [(usize, SpecNode)], node: SpecNode) {
@@ -130,14 +188,14 @@ fn attach(trees: &mut [SpecTree], stack: &mut [(usize, SpecNode)], node: SpecNod
     }
 }
 
-fn classify(text: &str, lineno: usize) -> Result<NodeKind> {
+fn classify(text: &str, line: usize) -> Result<NodeKind, ParseError> {
     let lower = text.to_lowercase();
     if lower.starts_with("when ") || lower.starts_with("given ") {
         Ok(NodeKind::Condition)
     } else if lower == "it" || lower.starts_with("it ") {
         Ok(NodeKind::Action)
     } else {
-        bail!("line {lineno}: node must start with `when`, `given`, or `it`: {text:?}");
+        Err(ParseError::UnknownKeyword { line, text: text.to_string() })
     }
 }
 
@@ -145,14 +203,14 @@ fn classify(text: &str, lineno: usize) -> Result<NodeKind> {
 ///
 /// Each nesting level is a 4-column prefix group: `│   `, `    `, `├── `, or
 /// `└── `. The final group before the text must be a connector (`├──`/`└──`).
-fn parse_line(line: &str, lineno: usize) -> Result<(usize, String)> {
+fn parse_line(line: &str, lineno: usize) -> Result<(usize, String), ParseError> {
     let mut rest = line;
     let mut depth = 0usize;
     loop {
         if let Some(r) = strip_group(rest, "├──").or_else(|| strip_group(rest, "└──")) {
             return Ok((depth + 1, r.trim().to_string()));
         }
-        if let Some(r) = strip_group(rest, "│").or_else(|| strip_group_spaces(rest)) {
+        if let Some(r) = strip_group(rest, "│").or_else(|| rest.strip_prefix("    ")) {
             depth += 1;
             rest = r;
             continue;
@@ -160,15 +218,14 @@ fn parse_line(line: &str, lineno: usize) -> Result<(usize, String)> {
         if depth == 0 {
             return Ok((0, rest.trim().to_string()));
         }
-        bail!("line {lineno}: malformed tree prefix: {line:?}");
+        return Err(ParseError::MalformedPrefix { line: lineno, text: line.to_string() });
     }
 }
 
 /// Strip a prefix marker plus enough spaces to fill its 4-column group.
 fn strip_group<'a>(s: &'a str, marker: &str) -> Option<&'a str> {
     let rest = s.strip_prefix(marker)?;
-    let cols = marker.chars().count();
-    let pad = 4usize.saturating_sub(cols);
+    let pad = 4usize.saturating_sub(marker.chars().count());
     // Allow the group to be cut short at end-of-line, otherwise require padding.
     if rest.is_empty() {
         return Some(rest);
@@ -178,10 +235,6 @@ fn strip_group<'a>(s: &'a str, marker: &str) -> Option<&'a str> {
         r = r.strip_prefix(' ')?;
     }
     Some(r)
-}
-
-fn strip_group_spaces(s: &str) -> Option<&str> {
-    s.strip_prefix("    ")
 }
 
 #[cfg(test)]
@@ -245,26 +298,27 @@ HashMap
         #[test]
         fn rejects_children_under_it_nodes() {
             let src = "A\n└── it works\n    └── it nested\n";
-            let err = parse(src).unwrap_err().to_string();
-            assert!(err.contains("cannot have children"), "{err}");
+            assert!(matches!(
+                parse(src),
+                Err(ParseError::ActionWithChildren { line: 3, parent_line: 2 })
+            ));
         }
 
         #[test]
         fn rejects_unknown_node_keywords() {
             let src = "A\n└── sometimes it works\n";
-            let err = parse(src).unwrap_err().to_string();
-            assert!(err.contains("must start with"), "{err}");
+            assert!(matches!(parse(src), Err(ParseError::UnknownKeyword { line: 2, .. })));
         }
 
         #[test]
         fn rejects_depth_jumps() {
             let src = "A\n└── when x\n│       └── it works\n";
-            assert!(parse(src).is_err());
+            assert!(matches!(parse(src), Err(ParseError::DepthJump { .. })));
         }
 
         #[test]
         fn rejects_empty_files() {
-            assert!(parse("\n\n").is_err());
+            assert!(matches!(parse("\n\n"), Err(ParseError::Empty)));
         }
     }
 }

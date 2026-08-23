@@ -9,16 +9,20 @@ use crate::tree::{NodeKind, SpecNode, SpecTree};
 /// applied, i.e. what the test file should contain.
 #[derive(Debug, Clone)]
 pub struct Expected {
+    /// Block or test.
     pub kind: ActualKind,
     /// Expected identifier / title in the source file.
     pub name: String,
     /// Original spec text (used by scaffold templates and messages).
     pub text: String,
+    /// 1-based line in the `.tree` file.
     pub spec_line: usize,
+    /// Expected children (always empty for tests).
     pub children: Vec<Expected>,
 }
 
 /// Build the expected structure for all trees in a file.
+#[must_use]
 pub fn expected_from_spec(trees: &[SpecTree], mapping: &Mapping) -> Vec<Expected> {
     let mut out = Vec::new();
     for tree in trees {
@@ -39,30 +43,26 @@ pub fn expected_from_spec(trees: &[SpecTree], mapping: &Mapping) -> Vec<Expected
 }
 
 fn expected_node(node: &SpecNode, mapping: &Mapping) -> Expected {
-    match node.kind {
-        NodeKind::Condition => Expected {
-            kind: ActualKind::Block,
-            name: mapping.block.apply(&node.text),
-            text: node.text.clone(),
-            spec_line: node.line,
-            children: node.children.iter().map(|c| expected_node(c, mapping)).collect(),
-        },
-        NodeKind::Action => Expected {
-            kind: ActualKind::Test,
-            name: mapping.test.apply(&node.text),
-            text: node.text.clone(),
-            spec_line: node.line,
-            children: Vec::new(),
-        },
+    let (kind, rule) = match node.kind {
+        NodeKind::Condition => (ActualKind::Block, &mapping.block),
+        NodeKind::Action => (ActualKind::Test, &mapping.test),
+    };
+    Expected {
+        kind,
+        name: rule.apply(&node.text),
+        text: node.text.clone(),
+        spec_line: node.line,
+        children: node.children.iter().map(|c| expected_node(c, mapping)).collect(),
     }
 }
 
 /// Splice out transparent wrapper blocks (e.g. Rust's `mod tests`).
+#[must_use]
 pub fn unwrap_wrappers(nodes: Vec<ActualNode>, wrappers: &[String]) -> Vec<ActualNode> {
     let mut out = Vec::new();
     for mut n in nodes {
         n.children = unwrap_wrappers(std::mem::take(&mut n.children), wrappers);
-        if n.kind == ActualKind::Block && wrappers.contains(&n.name) {
+        if n.kind == ActualKind::Block && wrappers.iter().any(|w| *w == n.name) {
             out.extend(n.children);
         } else {
             out.push(n);
@@ -71,27 +71,37 @@ pub fn unwrap_wrappers(nodes: Vec<ActualNode>, wrappers: &[String]) -> Vec<Actua
     out
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FindingKind {
-    MissingBlock,
-    MissingTest,
-    ExtraBlock,
-    ExtraTest,
-    OutOfOrder,
-}
-
-#[derive(Debug, Clone)]
-pub struct Finding {
-    pub kind: FindingKind,
-    /// Human path to the node, e.g. "when the key is present > returns_none".
-    pub path: String,
-    /// Line in the .tree file (for missing) — 1-based.
-    pub spec_line: Option<usize>,
-    /// Line in the target file (for extra / order) — 1-based.
-    pub target_line: Option<usize>,
+/// One discrepancy between a spec tree and a test file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Finding {
+    /// The spec describes this node but the file does not contain it.
+    Missing {
+        /// Block or test.
+        kind: ActualKind,
+        /// Human path to the node, e.g. "when_the_key_is_absent > returns_none".
+        path: String,
+        /// 1-based line in the `.tree` file.
+        spec_line: usize,
+    },
+    /// The file contains this node but the spec does not describe it.
+    Extra {
+        /// Block or test.
+        kind: ActualKind,
+        /// Human path to the node.
+        path: String,
+        /// 1-based line in the target file.
+        target_line: usize,
+    },
+    /// Sibling order in the file differs from the spec.
+    OutOfOrder {
+        /// Path of the parent whose children are out of order.
+        path: String,
+    },
 }
 
 /// Diff expected vs actual structure.
+#[must_use]
 pub fn diff(expected: &[Expected], actual: &[ActualNode]) -> Vec<Finding> {
     let mut findings = Vec::new();
     diff_level(expected, actual, "", &mut findings);
@@ -99,11 +109,7 @@ pub fn diff(expected: &[Expected], actual: &[ActualNode]) -> Vec<Finding> {
 }
 
 fn join(path: &str, name: &str) -> String {
-    if path.is_empty() {
-        name.to_string()
-    } else {
-        format!("{path} > {name}")
-    }
+    if path.is_empty() { name.to_string() } else { format!("{path} > {name}") }
 }
 
 fn diff_level(expected: &[Expected], actual: &[ActualNode], path: &str, out: &mut Vec<Finding>) {
@@ -111,9 +117,10 @@ fn diff_level(expected: &[Expected], actual: &[ActualNode], path: &str, out: &mu
     let mut matched_positions: Vec<usize> = Vec::new();
 
     for exp in expected {
-        let found = actual.iter().enumerate().find(|(i, a)| {
-            !used[*i] && a.kind == exp.kind && a.name.trim() == exp.name
-        });
+        let found = actual
+            .iter()
+            .enumerate()
+            .find(|(i, a)| !used[*i] && a.kind == exp.kind && a.name.trim() == exp.name);
         match found {
             Some((i, a)) => {
                 used[i] = true;
@@ -122,37 +129,26 @@ fn diff_level(expected: &[Expected], actual: &[ActualNode], path: &str, out: &mu
                     diff_level(&exp.children, &a.children, &join(path, &exp.name), out);
                 }
             }
-            None => out.push(Finding {
-                kind: match exp.kind {
-                    ActualKind::Block => FindingKind::MissingBlock,
-                    ActualKind::Test => FindingKind::MissingTest,
-                },
+            None => out.push(Finding::Missing {
+                kind: exp.kind,
                 path: join(path, &exp.name),
-                spec_line: Some(exp.spec_line),
-                target_line: None,
+                spec_line: exp.spec_line,
             }),
         }
     }
 
-    if matched_positions.windows(2).any(|w| w[0] > w[1]) {
-        out.push(Finding {
-            kind: FindingKind::OutOfOrder,
+    if !matched_positions.is_sorted() {
+        out.push(Finding::OutOfOrder {
             path: if path.is_empty() { "(top level)".into() } else { path.to_string() },
-            spec_line: expected.first().map(|e| e.spec_line),
-            target_line: None,
         });
     }
 
     for (i, a) in actual.iter().enumerate() {
         if !used[i] {
-            out.push(Finding {
-                kind: match a.kind {
-                    ActualKind::Block => FindingKind::ExtraBlock,
-                    ActualKind::Test => FindingKind::ExtraTest,
-                },
+            out.push(Finding::Extra {
+                kind: a.kind,
                 path: join(path, &a.name),
-                spec_line: None,
-                target_line: Some(a.line),
+                target_line: a.line,
             });
         }
     }
@@ -237,10 +233,14 @@ Adder
                 block("when_one_input_is_negative", vec![test("returns_the_difference")]),
             ];
             let findings = diff(&expected, &actual);
-            assert_eq!(findings.len(), 1);
-            assert_eq!(findings[0].kind, FindingKind::MissingTest);
-            assert_eq!(findings[0].path, "when_both_inputs_are_zero > returns_zero");
-            assert_eq!(findings[0].spec_line, Some(3));
+            assert_eq!(
+                findings,
+                vec![Finding::Missing {
+                    kind: ActualKind::Test,
+                    path: "when_both_inputs_are_zero > returns_zero".into(),
+                    spec_line: 3,
+                }]
+            );
         }
     }
 
@@ -260,7 +260,10 @@ Adder
             ];
             let findings = diff(&expected, &actual);
             assert_eq!(findings.len(), 1);
-            assert_eq!(findings[0].kind, FindingKind::ExtraTest);
+            assert!(matches!(
+                findings[0],
+                Finding::Extra { kind: ActualKind::Test, .. }
+            ));
         }
     }
 
@@ -277,7 +280,7 @@ Adder
             ];
             let findings = diff(&expected, &actual);
             assert_eq!(findings.len(), 1);
-            assert_eq!(findings[0].kind, FindingKind::OutOfOrder);
+            assert!(matches!(findings[0], Finding::OutOfOrder { .. }));
         }
     }
 }

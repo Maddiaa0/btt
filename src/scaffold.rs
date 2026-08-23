@@ -12,14 +12,22 @@
 //! times).
 
 use crate::check::Expected;
+use crate::error::{Error, Result};
 use crate::extract::ActualKind;
 use crate::pack::Pack;
-use anyhow::{Context, Result};
 use serde::Serialize;
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum EventKind {
+    Open,
+    Close,
+    Test,
+}
 
 #[derive(Debug, Serialize)]
 struct Event {
-    kind: &'static str,
+    kind: EventKind,
     name: String,
     text: String,
     depth: usize,
@@ -28,48 +36,40 @@ struct Event {
 
 fn flatten(nodes: &[Expected], depth: usize, unit: &str, out: &mut Vec<Event>) {
     for node in nodes {
-        let indent = unit.repeat(depth);
+        let event = |kind: EventKind| Event {
+            kind,
+            name: node.name.clone(),
+            text: node.text.clone(),
+            depth,
+            indent: unit.repeat(depth),
+        };
         match node.kind {
-            ActualKind::Test => out.push(Event {
-                kind: "test",
-                name: node.name.clone(),
-                text: node.text.clone(),
-                depth,
-                indent,
-            }),
+            ActualKind::Test => out.push(event(EventKind::Test)),
             ActualKind::Block => {
-                out.push(Event {
-                    kind: "open",
-                    name: node.name.clone(),
-                    text: node.text.clone(),
-                    depth,
-                    indent: indent.clone(),
-                });
+                out.push(event(EventKind::Open));
                 flatten(&node.children, depth + 1, unit, out);
-                out.push(Event {
-                    kind: "close",
-                    name: node.name.clone(),
-                    text: node.text.clone(),
-                    depth,
-                    indent,
-                });
+                out.push(event(EventKind::Close));
             }
         }
     }
 }
 
 /// Render the pack's scaffold template for the given expected structure.
+///
+/// # Errors
+///
+/// Fails if the pack's template does not compile or render.
 pub fn render(pack: &Pack, expected: &[Expected], stem: &str) -> Result<String> {
     let mut events = Vec::new();
     flatten(expected, 0, &pack.manifest.scaffold.indent, &mut events);
 
-    let mut env = minijinja::Environment::new();
-    env.add_template("scaffold", &pack.template)
-        .with_context(|| format!("pack `{}`: invalid scaffold template", pack.name()))?;
-    let tmpl = env.get_template("scaffold").unwrap();
-    let out = tmpl
-        .render(minijinja::context! { events => events, stem => stem })
-        .with_context(|| format!("pack `{}`: rendering scaffold", pack.name()))?;
+    let env = minijinja::Environment::new();
+    let out = env
+        .render_str(&pack.template, minijinja::context! { events => events, stem => stem })
+        .map_err(|source| Error::Template {
+            pack: pack.name().to_string(),
+            source: Box::new(source),
+        })?;
     // Normalize trailing whitespace: exactly one final newline.
     Ok(format!("{}\n", out.trim_end()))
 }

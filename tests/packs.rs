@@ -1,7 +1,8 @@
 //! End-to-end tests for the builtin language packs, driven through the
 //! public library API. Sources are in-memory; no fixture files needed.
 
-use btt::check::{self, FindingKind};
+use btt::check::{self, Finding};
+use btt::extract::ActualKind;
 use btt::{extract, pack, scaffold, tree};
 use std::path::Path;
 
@@ -70,9 +71,13 @@ describe("HashMap", () => {
 });
 "#;
         let findings = ts_findings(source);
-        let kinds: Vec<FindingKind> = findings.iter().map(|f| f.kind).collect();
-        assert!(kinds.contains(&FindingKind::MissingTest), "{findings:?}");
-        assert!(kinds.contains(&FindingKind::ExtraTest), "{findings:?}");
+        let missing = findings
+            .iter()
+            .any(|f| matches!(f, Finding::Missing { kind: ActualKind::Test, .. }));
+        let extra = findings
+            .iter()
+            .any(|f| matches!(f, Finding::Extra { kind: ActualKind::Test, .. }));
+        assert!(missing && extra, "{findings:?}");
     }
 }
 

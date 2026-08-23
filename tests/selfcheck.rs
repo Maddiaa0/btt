@@ -25,12 +25,7 @@ mod when_checking_btt_against_its_own_trees {
                         runner::check_file(pack, tree_path, &path, &CheckConfig::default())
                             .unwrap();
                     for r in reported {
-                        problems.push(format!(
-                            "{}: {:?} `{}`",
-                            tree_path.display(),
-                            r.finding.kind,
-                            r.finding.path
-                        ));
+                        problems.push(format!("{}: {:?}", tree_path.display(), r.finding));
                     }
                 }
                 Target::NotFound { .. } => {

@@ -2,14 +2,21 @@
 name = "btt"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+description = "Branch tree testing for any language: check and scaffold test suites from bulloak-style .tree specs"
+repository = "https://github.com/Maddiaa0/btt"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+keywords = ["testing", "bulloak", "btt", "tree-sitter", "scaffold"]
+categories = ["development-tools::testing", "command-line-utilities"]
 
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive"] }
 include_dir = "0.7.4"
 minijinja = "2.23.0"
-semver = "1.0.28"
 serde = { version = "1.0.229", features = ["derive"] }
+thiserror = "2.0.20"
 toml = "1.1.4"
 tree-sitter = "0.26.12"
 tree-sitter-rust = "0.24.2"
@@ -19,3 +26,7 @@ walkdir = "2.5.0"
 [profile.release]
 strip = true
 lto = true
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"

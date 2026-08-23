@@ -52,7 +52,8 @@ honest. Two copy-paste files in this repo — they are **not** interchangeable:
 
 ## Architecture
 
-One small static binary; languages are **packs** — pure data, no code:
+One small static binary; languages are **packs** — declarative data, plus
+optionally a sandboxed grammar module:
 
 ```text
 packs/rust/
@@ -81,9 +82,14 @@ $XDG_CONFIG_HOME/btt/packs/<name>/   # user-global (default ~/.config/btt/packs)
 ```
 
 Adding a language never means rebuilding the binary: drop a pack folder in
-`.btt/packs/` and it loads at runtime. Packs contain no executable code
-(manifest + query + templates), so vendoring one is reviewable like any
-config change.
+`.btt/packs/` and it loads at runtime. The trust boundary is explicit:
+
+- **Pack data** (manifest, query, naming rules, templates) is declarative —
+  reviewable like any config change. Manifests are parsed strictly and
+  every path they name is confined to the pack directory.
+- **Grammar wasm** (optional, `wasm` feature) is the one part of a pack
+  that is code. It runs sandboxed (see below), but treat it like a
+  dependency: review it, pin digests, get it from a source you trust.
 
 ### Sandboxed WASM grammars (experimental)
 
@@ -99,12 +105,22 @@ symbol = "rust"                # module exports tree_sitter_<symbol>
 This is the same architecture Zed uses: the tree-sitter runtime stays
 native, while the grammar module — including any external scanner code, the
 only arbitrary code a grammar ships — is instantiated in a wasmtime store
-with no WASI, so it cannot touch the filesystem or network. The
+with no WASI, so it has no ambient filesystem or network access. The
 `packs-wasm/` directory holds wasm twins of the builtin packs (grammars
 fetched by `scripts/fetch-wasm-grammars.sh`, pinned by release tag and
 sha256), and `tests/wasm.rs` proves they extract structure identical to the
 natively compiled grammars. Without the feature, the core stays lean and
 wasm packs fail with a clear error.
+
+**What the sandbox is and isn't.** No-WASI instantiation removes ambient
+authority — a grammar cannot open files or sockets. It is *not* a hardened
+boundary against deliberately hostile modules: tree-sitter's host bridge is
+native code that consumes module-provided tables, and there is currently no
+fuel/epoch limit on grammar execution. Wasm grammars are therefore
+**trusted, provenance-pinned artifacts** — vet them like dependencies, as
+the fetch script's tag + sha256 pinning models. Running genuinely untrusted
+packs would need a resource-limited subprocess; that is future work, not a
+property of today's implementation.
 
 ## Configuration
 

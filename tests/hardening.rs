@@ -61,6 +61,24 @@ mod when_a_pack_manifest_references_paths_outside_its_directory {
     }
 }
 
+mod when_a_pack_file_is_a_symlink_escaping_the_pack {
+    use super::*;
+
+    // confine() checks the textual path; symlinks are the way around it,
+    // so reads resolve the real path and require it to stay inside.
+    #[test]
+    fn refuses_to_load() {
+        let dir = fixture_pack("symlink-escape", ToString::to_string);
+        let outside = repo_root().join("target/hardening-fixtures/outside.jinja");
+        std::fs::write(&outside, "leaked").unwrap();
+        std::fs::remove_file(dir.join("templates/test.jinja")).unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join("templates/test.jinja")).unwrap();
+
+        let err = pack::load_dir(&dir).unwrap_err();
+        assert!(matches!(err, Error::UnsafePath { .. }), "{err}");
+    }
+}
+
 mod when_a_pack_name_is_not_a_single_path_component {
     use super::*;
 

@@ -14,9 +14,24 @@
 //!   3. `~/.btt/packs/foo/`                (user-global, legacy location)
 //!   4. packs embedded in the binary       (rust, typescript)
 //!
-//! Packs are data-only: a manifest, a tree-sitter query, and templates. They
-//! never contain executable code, so vendoring one is as reviewable as any
-//! other config change.
+//! ## Trust model
+//!
+//! - **Core** (this binary): configuration, routing, mapping, diffing,
+//!   reporting.
+//! - **Pack data** (manifest, query, mapping, templates): declarative but
+//!   pack-controlled. Manifests parse strictly (unknown fields rejected),
+//!   every path they name is confined to the pack directory, and queries
+//!   run in the native tree-sitter runtime — they can cost CPU, not reach
+//!   the system.
+//! - **Executable extension** (`wasm:` grammars): the one part of a pack
+//!   that is code — grammar tables plus any external scanner. Instantiated
+//!   without WASI, which removes ambient filesystem/network access, but
+//!   the tree-sitter host bridge is native code consuming module data, so
+//!   this is *not* a hardened boundary for hostile modules. Treat wasm
+//!   packs like any other dependency: review them, pin digests, obtain
+//!   them from sources you trust (as `scripts/fetch-wasm-grammars.sh`
+//!   does). Subprocess isolation for genuinely untrusted packs is future
+//!   work.
 
 use crate::error::{Error, Result};
 use crate::mapping::Mapping;
@@ -267,6 +282,28 @@ fn read(path: &Path) -> Result<String> {
     std::fs::read_to_string(path).map_err(|source| Error::io(path, source))
 }
 
+/// Resolve a pack-relative file to its real path, requiring it to still be
+/// a regular file inside the pack directory after following symlinks.
+/// `confine` checks the textual path; this closes the symlink hole.
+fn resolve_inside(dir: &Path, rel: &Path, pack: &str, field: &'static str) -> Result<PathBuf> {
+    let path = dir.join(rel);
+    let canon = path
+        .canonicalize()
+        .map_err(|source| Error::io(&path, source))?;
+    let dir_canon = dir
+        .canonicalize()
+        .map_err(|source| Error::io(dir, source))?;
+    if canon.starts_with(&dir_canon) && canon.is_file() {
+        Ok(canon)
+    } else {
+        Err(Error::UnsafePath {
+            pack: pack.to_string(),
+            field,
+            value: rel.display().to_string(),
+        })
+    }
+}
+
 fn load_from_dir(dir: &Path, origin: Origin) -> Result<Pack> {
     let manifest_path = dir.join("pack.toml");
     let manifest: Manifest =
@@ -275,13 +312,28 @@ fn load_from_dir(dir: &Path, origin: Origin) -> Result<Pack> {
             source: Box::new(source),
         })?;
     validate(&manifest)?;
-    let query = read(&dir.join(&manifest.extract.query))?;
-    let template = read(&dir.join(&manifest.scaffold.template))?;
+    let name = manifest.pack.name.clone();
+    let query = read(&resolve_inside(
+        dir,
+        Path::new(&manifest.extract.query),
+        &name,
+        "extract.query",
+    )?)?;
+    let template = read(&resolve_inside(
+        dir,
+        Path::new(&manifest.scaffold.template),
+        &name,
+        "scaffold.template",
+    )?)?;
     let wasm_grammar = match &manifest.grammar.source {
-        // An unreadable grammar file is not a load error: it surfaces
-        // per-file at parse time (via `grammar_for`), so one broken wasm
-        // pack can't abort a whole run.
-        GrammarSource::Wasm(file) => std::fs::read(dir.join(file)).ok(),
+        GrammarSource::Wasm(file) => match resolve_inside(dir, file, &name, "grammar.source") {
+            Ok(real) => std::fs::read(real).ok(),
+            // An escaping symlink is a hard error; a merely missing or
+            // unreadable grammar surfaces per file at parse time, so one
+            // broken wasm pack can't abort a whole run.
+            Err(e @ Error::UnsafePath { .. }) => return Err(e),
+            Err(_) => None,
+        },
         GrammarSource::Builtin(_) => None,
     };
     Ok(Pack {

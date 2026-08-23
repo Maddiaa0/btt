@@ -60,14 +60,15 @@ impl ActualNode {
     }
 }
 
-/// A captured definition, before nesting is derived.
+/// A captured definition, before nesting is derived. Shared with the
+/// lexical backend so both build the same forest the same way.
 #[derive(Debug)]
-struct Capture {
-    kind: ActualKind,
-    name: String,
-    line: usize,
-    start: usize,
-    end: usize,
+pub(crate) struct Capture {
+    pub(crate) kind: ActualKind,
+    pub(crate) name: String,
+    pub(crate) line: usize,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
 }
 
 /// Parse `source` with the pack's grammar and return the top-level actual
@@ -78,6 +79,9 @@ struct Capture {
 /// Fails if the pack's grammar is unavailable, its query does not compile or
 /// lacks the required captures, or tree-sitter cannot parse the source.
 pub fn extract(pack: &Pack, target: &Path, source: &str) -> Result<Vec<ActualNode>> {
+    if let pack::Grammar::Lexical(cfg) = pack::grammar_for(pack, target)? {
+        return crate::lexical::extract(pack, cfg, source);
+    }
     let (tree, language) = parse_source(pack, target, source)?;
 
     let query = Query::new(&language, &pack.query).map_err(|source| Error::Query {
@@ -170,6 +174,8 @@ fn parse_source(
             bytes,
             hash,
         } => wasm::parse(pack, symbol, bytes, hash, target, source),
+        // Dispatched before parse_source is reached (`extract`).
+        pack::Grammar::Lexical(_) => unreachable!("lexical packs do not parse"),
     }
 }
 
@@ -280,7 +286,11 @@ mod wasm {
     }
 }
 
-fn build_nodes(captures: &[Capture], i: &mut usize, parent_end: usize) -> Vec<ActualNode> {
+pub(crate) fn build_nodes(
+    captures: &[Capture],
+    i: &mut usize,
+    parent_end: usize,
+) -> Vec<ActualNode> {
     let mut out = Vec::new();
     while *i < captures.len() && captures[*i].start < parent_end {
         let c = &captures[*i];
@@ -306,17 +316,22 @@ fn capture(
     source: &str,
     syntax: NameSyntax,
 ) -> Capture {
-    let raw = &source[name_node.byte_range()];
-    let name = match syntax {
-        NameSyntax::Raw => raw.to_string(),
-        NameSyntax::JsString => decode_js_string(raw),
-    };
+    let name = decode_name(syntax, &source[name_node.byte_range()]);
     Capture {
         kind,
         name,
         line: node.start_position().row + 1,
         start: node.start_byte(),
         end: node.end_byte(),
+    }
+}
+
+/// Decode a captured name's source text to a plain title, per the pack's
+/// declared syntax. Shared with the lexical backend.
+pub(crate) fn decode_name(syntax: NameSyntax, raw: &str) -> String {
+    match syntax {
+        NameSyntax::Raw => raw.to_string(),
+        NameSyntax::JsString => decode_js_string(raw),
     }
 }
 

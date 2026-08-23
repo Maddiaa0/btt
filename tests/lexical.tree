@@ -1,0 +1,11 @@
+lexical extraction
+├── when extracting typescript lexically
+│   └── it matches the native extraction
+├── when decoys hide in comments and strings
+│   └── it matches the native extraction
+├── when fuzzing random test files
+│   └── it never diverges from the native extraction
+├── when a scaffolded file is checked lexically
+│   └── it reports no findings for hostile titles
+└── when the scanner cannot account for the source
+    └── it fails closed

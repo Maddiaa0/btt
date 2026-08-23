@@ -127,6 +127,41 @@ the fetch script's tag + sha256 pinning models. Running genuinely untrusted
 packs would need a resource-limited subprocess; that is future work, not a
 property of today's implementation.
 
+### Lexical packs (prototype)
+
+A pack can skip grammars entirely: `source = "lexical"` replaces the
+query and grammar with a small declarative profile — comment and string
+syntax, nesting brackets, and two regexes describing what a block and a
+test look like:
+
+```toml
+[grammar]
+source = "lexical"
+
+[lexical]
+line_comment = "//"
+block_comment = ["/*", "*/"]
+strings = [{ delim = '"', escape = '\' }, { delim = "'", escape = '\' }]
+nest = [["(", ")"], ["{", "}"]]
+
+[lexical.block]
+open = '...regex with a (?<name>...) capture...'
+
+[lexical.test]
+open = '...'
+```
+
+The core masks comments and strings, matches openers only in real code,
+and derives nesting from bracket spans — the same structural containment
+rule the grammar path uses. The payoff is the extension story: a lexical
+pack is 100% reviewable text, no compiled artifact to vet or distribute.
+The tradeoff is a lower robustness ceiling (syntax the profile cannot
+see, like JS regex literals, is invisible), so the scanner **fails
+closed** on anything it cannot balance, and `packs-lexical/typescript`
+is differentially fuzzed against the native grammar in
+`tests/lexical.rs` to keep the two extraction paths byte-identical on
+realistic test files.
+
 ## Configuration
 
 `btt.toml` at the repo root:

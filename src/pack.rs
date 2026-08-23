@@ -79,6 +79,8 @@ pub enum GrammarSource {
     Builtin(String),
     /// A sandboxed WASM grammar shipped with the pack (`wasm:<file>`).
     Wasm(PathBuf),
+    /// No grammar: the pack's `[lexical]` profile drives extraction.
+    Lexical,
 }
 
 impl<'de> Deserialize<'de> for GrammarSource {
@@ -90,12 +92,58 @@ impl<'de> Deserialize<'de> for GrammarSource {
             Ok(GrammarSource::Builtin(name.to_string()))
         } else if let Some(file) = s.strip_prefix("wasm:") {
             Ok(GrammarSource::Wasm(PathBuf::from(file)))
+        } else if s == "lexical" {
+            Ok(GrammarSource::Lexical)
         } else {
             Err(serde::de::Error::custom(format!(
-                "grammar source must be `builtin:<name>` or `wasm:<file>`, got {s:?}"
+                "grammar source must be `builtin:<name>`, `wasm:<file>`, or `lexical`, got {s:?}"
             )))
         }
     }
+}
+
+/// One string-literal form in a lexical profile.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StringRule {
+    /// The delimiter that opens and closes the literal (`"`, `'`, `` ` ``).
+    pub delim: String,
+    /// The escape prefix inside the literal, if the language has one.
+    #[serde(default)]
+    pub escape: Option<String>,
+}
+
+/// A block or test opener pattern in a lexical profile.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Opener {
+    /// Regex matched against code (comments/strings masked out). Must
+    /// define a `(?<name>...)` capture for the title, including its
+    /// quotes when `extract.name_syntax` decodes them.
+    pub open: String,
+}
+
+/// The lexical profile of a `source = "lexical"` pack: just enough syntax
+/// to tell code from comments and strings, plus what a block and a test
+/// look like. See [`crate::lexical`] for how extraction uses it.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Lexical {
+    /// Line-comment opener (`//`, `#`); runs to end of line.
+    #[serde(default)]
+    pub line_comment: Option<String>,
+    /// Block-comment open/close pair (`["/*", "*/"]`), non-nesting.
+    #[serde(default)]
+    pub block_comment: Option<(String, String)>,
+    /// String-literal forms, tried in order at each position.
+    #[serde(default)]
+    pub strings: Vec<StringRule>,
+    /// Bracket pairs that define nesting spans (e.g. `[["(", ")"], ["{", "}"]]`).
+    pub nest: Vec<(String, String)>,
+    /// What opens a nesting block.
+    pub block: Opener,
+    /// What declares a test.
+    pub test: Opener,
 }
 
 /// Grammar section of a pack manifest.
@@ -127,8 +175,10 @@ pub enum NameSyntax {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Extract {
-    /// Path (within the pack) of the tree-sitter query file.
-    pub query: String,
+    /// Path (within the pack) of the tree-sitter query file. Required for
+    /// grammar-backed packs; absent for `lexical` packs.
+    #[serde(default)]
+    pub query: Option<String>,
     /// If true, a `@test` capture only counts as a test when a
     /// `@test.marker` capture (e.g. a `#[test]` attribute) directly
     /// precedes it among its siblings.
@@ -171,6 +221,9 @@ pub struct Manifest {
     /// Node-text-to-identifier rules.
     #[serde(default)]
     pub mapping: Mapping,
+    /// Lexical profile (required iff `grammar.source = "lexical"`).
+    #[serde(default)]
+    pub lexical: Option<Lexical>,
     /// Scaffold template configuration.
     pub scaffold: Scaffold,
 }
@@ -280,10 +333,40 @@ fn confine(pack: &str, field: &'static str, value: &str) -> Result<()> {
     }
 }
 
-/// Validate every path-like manifest field before any of them is used.
+/// Validate every path-like manifest field before any of them is used,
+/// plus cross-field consistency (a lexical pack needs its profile and
+/// nothing grammar-shaped; a grammar pack needs its query).
 fn validate(manifest: &Manifest) -> Result<()> {
     let pack = &manifest.pack.name;
-    confine(pack, "extract.query", &manifest.extract.query)?;
+    let shape = |message: &str| Error::Manifest {
+        pack: pack.clone(),
+        message: message.to_string(),
+    };
+    if matches!(manifest.grammar.source, GrammarSource::Lexical) {
+        if manifest.lexical.is_none() {
+            return Err(shape(
+                "grammar source `lexical` requires a [lexical] section",
+            ));
+        }
+        if manifest.extract.query.is_some() {
+            return Err(shape("lexical packs must not set extract.query"));
+        }
+        if manifest.extract.test_requires_marker {
+            return Err(shape(
+                "extract.test_requires_marker is not supported by lexical packs",
+            ));
+        }
+    } else {
+        if manifest.lexical.is_some() {
+            return Err(shape("[lexical] requires grammar source `lexical`"));
+        }
+        if manifest.extract.query.is_none() {
+            return Err(shape("grammar-backed packs require extract.query"));
+        }
+    }
+    if let Some(query) = &manifest.extract.query {
+        confine(pack, "extract.query", query)?;
+    }
     confine(pack, "scaffold.template", &manifest.scaffold.template)?;
     confine(pack, "scaffold.output", &manifest.scaffold.output)?;
     if let GrammarSource::Wasm(file) = &manifest.grammar.source {
@@ -398,12 +481,10 @@ fn load_from_dir(dir: &Path, origin: Origin) -> Result<Pack> {
         })?;
     validate(&manifest)?;
     let name = manifest.pack.name.clone();
-    let query = read(&resolve_inside(
-        dir,
-        Path::new(&manifest.extract.query),
-        &name,
-        "extract.query",
-    )?)?;
+    let query = match &manifest.extract.query {
+        Some(q) => read(&resolve_inside(dir, Path::new(q), &name, "extract.query")?)?,
+        None => String::new(),
+    };
     let template = read(&resolve_inside(
         dir,
         Path::new(&manifest.scaffold.template),
@@ -419,7 +500,7 @@ fn load_from_dir(dir: &Path, origin: Origin) -> Result<Pack> {
             Err(e @ Error::UnsafePath { .. }) => return Err(e),
             Err(_) => None,
         },
-        GrammarSource::Builtin(_) => None,
+        GrammarSource::Builtin(_) | GrammarSource::Lexical => None,
     };
     Ok(Pack {
         manifest,
@@ -458,13 +539,16 @@ fn load_embedded(dir: &Dir<'static>) -> Result<Pack> {
         source: Box::new(source),
     })?;
     validate(&manifest)?;
-    let query = file(&manifest.extract.query)?.to_string();
+    let query = match &manifest.extract.query {
+        Some(q) => file(q)?.to_string(),
+        None => String::new(),
+    };
     let template = file(&manifest.scaffold.template)?.to_string();
     let wasm_grammar = match &manifest.grammar.source {
         GrammarSource::Wasm(file) => dir
             .get_file(dir.path().join(file))
             .map(|f| WasmGrammar::new(f.contents().to_vec())),
-        GrammarSource::Builtin(_) => None,
+        GrammarSource::Builtin(_) | GrammarSource::Lexical => None,
     };
     Ok(Pack {
         manifest,
@@ -623,6 +707,8 @@ pub enum Grammar<'a> {
         /// Content hash of `bytes` — the cache identity of the module.
         hash: u64,
     },
+    /// No grammar: extraction runs the pack's lexical profile.
+    Lexical(&'a Lexical),
 }
 
 /// Resolve the grammar for a pack + target file.
@@ -649,6 +735,17 @@ pub fn grammar_for<'a>(pack: &'a Pack, target: &Path) -> Result<Grammar<'a>> {
                 bytes: grammar.bytes(),
                 hash: grammar.hash(),
             })
+        }
+        GrammarSource::Lexical => {
+            let lexical = pack
+                .manifest
+                .lexical
+                .as_ref()
+                .ok_or_else(|| Error::Manifest {
+                    pack: pack.name().to_string(),
+                    message: "grammar source `lexical` requires a [lexical] section".to_string(),
+                })?;
+            Ok(Grammar::Lexical(lexical))
         }
         GrammarSource::Builtin(name) => match name.as_str() {
             "rust" => Ok(Grammar::Native(tree_sitter_rust::LANGUAGE.into())),

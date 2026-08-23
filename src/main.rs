@@ -112,11 +112,15 @@ fn cmd_check(
         return Ok(ExitCode::SUCCESS);
     }
 
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(jobs.map_or(0, NonZeroUsize::get))
-        .build()
-        .context("building thread pool")?;
-    let outcomes = pool.install(|| runner::check_all(&packs, &tree_files, cfg.check));
+    let outcomes = match jobs {
+        Some(jobs) => rayon::ThreadPoolBuilder::new()
+            .num_threads(jobs.get())
+            .build()
+            .context("building thread pool")?
+            .install(|| runner::check_all(&packs, &tree_files, cfg.check)),
+        // No -j: the lazily-built global rayon pool (one thread per core).
+        None => runner::check_all(&packs, &tree_files, cfg.check),
+    };
 
     let (mut errors, mut warnings) = (0usize, 0usize);
     for outcome in &outcomes {
@@ -131,7 +135,16 @@ fn cmd_check(
         "\n{} tree file(s), {errors} error(s), {warnings} warning(s)",
         tree_files.len()
     );
-    Ok(if errors > 0 { ExitCode::FAILURE } else { ExitCode::SUCCESS })
+    // Spec drift exits 1; a file that could not be checked at all is a tool
+    // failure and exits 2, like every other tool error.
+    let failed = outcomes.iter().any(|o| matches!(o.result, runner::FileResult::Failed(_)));
+    Ok(if failed {
+        ExitCode::from(2)
+    } else if errors > 0 {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    })
 }
 
 fn render(outcome: &runner::FileOutcome, root: &Path) -> FileReport {

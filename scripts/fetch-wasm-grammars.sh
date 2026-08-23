@@ -15,8 +15,15 @@ fetch() {
     return
   fi
   echo "fetching     $repo@$tag/$asset"
-  curl -sfL "https://github.com/${repo}/releases/download/${tag}/${asset}" -o "$dest"
-  echo "$sha  $dest" | sha256sum -c --quiet
+  # Download to a temp path and rename only after the checksum verifies, so
+  # an unverified module never sits at the path btt loads from.
+  curl -sfL "https://github.com/${repo}/releases/download/${tag}/${asset}" -o "${dest}.tmp"
+  if ! echo "$sha  ${dest}.tmp" | sha256sum -c --quiet; then
+    rm -f "${dest}.tmp"
+    echo "error: sha256 mismatch for ${asset}" >&2
+    return 1
+  fi
+  mv "${dest}.tmp" "$dest"
   echo "ok (fetched) $dest"
 }
 

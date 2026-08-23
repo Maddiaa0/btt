@@ -81,6 +81,27 @@ describe("HashMap", () => {
     }
 }
 
+mod when_checking_a_playwright_style_file {
+    use super::*;
+
+    #[test]
+    fn treats_test_describe_as_a_block() {
+        let source = r#"
+import { test } from "@playwright/test";
+test.describe("HashMap", () => {
+  test.describe("when the key is present", () => {
+    test("returns the value", () => {});
+  });
+  test.describe("when the key is absent", () => {
+    test("returns none", () => {});
+  });
+});
+"#;
+        let findings = ts_findings(source);
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+}
+
 mod when_scaffolding_from_a_tree {
     use super::*;
 
@@ -100,5 +121,29 @@ mod when_scaffolding_from_a_tree {
         assert!(out.contains(r#"describe("HashMap", () => {"#), "{out}");
         assert!(out.contains(r#"  describe("when the key is absent", () => {"#), "{out}");
         assert!(out.contains(r#"it("returns none", () => {"#), "{out}");
+    }
+}
+
+mod when_a_builtin_pack_has_a_wasm_twin {
+    use super::*;
+
+    // The packs-wasm/ twins differ only in their [grammar] section; queries
+    // and templates must stay byte-identical so a fix to one can't silently
+    // miss the other.
+    #[test]
+    fn keeps_queries_and_templates_identical() {
+        for name in ["rust", "typescript"] {
+            for rel in ["queries/tests.scm", "templates/test.jinja"] {
+                let read = |base: &str| {
+                    std::fs::read_to_string(repo_root().join(base).join(name).join(rel))
+                        .unwrap()
+                };
+                assert_eq!(
+                    read("packs"),
+                    read("packs-wasm"),
+                    "packs-wasm/{name}/{rel} drifted from packs/{name}/{rel}"
+                );
+            }
+        }
     }
 }

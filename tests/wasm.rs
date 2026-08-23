@@ -90,3 +90,41 @@ mod when_parsing_typescript_through_a_wasm_grammar {
         assert_eq!(native, sandboxed);
     }
 }
+
+mod when_a_wasm_grammar_fails_to_load {
+    use super::*;
+
+    // Regression: a failed load used to drop the thread's wasm store, so
+    // every grammar already cached on that thread stopped working. The
+    // whole sequence must run in one #[test] fn (= one thread).
+    #[test]
+    fn does_not_poison_other_grammars_on_the_thread() {
+        let good = wasm_pack("typescript");
+        let first = extract::extract(&good, Path::new("map.test.ts"), TS_SOURCE).unwrap();
+        assert!(!first.is_empty());
+
+        let mut bad = wasm_pack("rust");
+        bad.wasm_grammar = Some(vec![0x00, 0x61, 0x73, 0x6d]); // truncated module
+        extract::extract(&bad, Path::new("map.rs"), RUST_SOURCE).unwrap_err();
+
+        let again = extract::extract(&good, Path::new("map.test.ts"), TS_SOURCE).unwrap();
+        assert_eq!(first, again);
+    }
+}
+
+mod when_two_packs_share_a_grammar_symbol {
+    use super::*;
+
+    #[test]
+    fn reports_a_collision_instead_of_reusing_the_wrong_grammar() {
+        let ts = wasm_pack("typescript");
+        assert!(!extract::extract(&ts, Path::new("map.test.ts"), TS_SOURCE).unwrap().is_empty());
+
+        // A different grammar claiming the already-loaded symbol.
+        let mut imposter = wasm_pack("rust");
+        imposter.manifest.grammar.symbol = Some("typescript".to_string());
+        let err =
+            extract::extract(&imposter, Path::new("map.rs"), RUST_SOURCE).unwrap_err();
+        assert!(err.to_string().contains("distinct symbol"), "{err}");
+    }
+}

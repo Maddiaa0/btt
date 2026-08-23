@@ -54,7 +54,6 @@ pub enum GrammarSource {
     /// A grammar compiled into the core binary (`builtin:<name>`).
     Builtin(String),
     /// A sandboxed WASM grammar shipped with the pack (`wasm:<file>`).
-    /// Reserved: not supported yet.
     Wasm(PathBuf),
 }
 
@@ -191,10 +190,10 @@ fn load_from_dir(dir: &Path, origin: Origin) -> Result<Pack> {
     let query = read(&dir.join(&manifest.extract.query))?;
     let template = read(&dir.join(&manifest.scaffold.template))?;
     let wasm_grammar = match &manifest.grammar.source {
-        GrammarSource::Wasm(file) => {
-            let path = dir.join(file);
-            Some(std::fs::read(&path).map_err(|source| Error::io(path, source))?)
-        }
+        // An unreadable grammar file is not a load error: it surfaces
+        // per-file at parse time (via `grammar_for`), so one broken wasm
+        // pack can't abort a whole run.
+        GrammarSource::Wasm(file) => std::fs::read(dir.join(file)).ok(),
         GrammarSource::Builtin(_) => None,
     };
     Ok(Pack { manifest, query, template, wasm_grammar, origin })
@@ -226,7 +225,13 @@ fn load_embedded(dir: &Dir<'static>) -> Result<Pack> {
     })?;
     let query = file(&manifest.extract.query)?.to_string();
     let template = file(&manifest.scaffold.template)?.to_string();
-    Ok(Pack { manifest, query, template, wasm_grammar: None, origin: Origin::Builtin })
+    let wasm_grammar = match &manifest.grammar.source {
+        GrammarSource::Wasm(file) => {
+            dir.get_file(dir.path().join(file)).map(|f| f.contents().to_vec())
+        }
+        GrammarSource::Builtin(_) => None,
+    };
+    Ok(Pack { manifest, query, template, wasm_grammar, origin: Origin::Builtin })
 }
 
 /// Load a pack by name, honoring the resolution order.
@@ -300,7 +305,7 @@ pub enum Grammar<'a> {
     /// A sandboxed WASM grammar shipped by the pack.
     Wasm {
         /// The language symbol the module exports (`tree_sitter_<symbol>`).
-        symbol: String,
+        symbol: &'a str,
         /// The compiled grammar module.
         bytes: &'a [u8],
     },
@@ -319,12 +324,7 @@ pub fn grammar_for<'a>(pack: &'a Pack, target: &Path) -> Result<Grammar<'a>> {
                 pack: pack.name().to_string(),
                 file: file.display().to_string(),
             })?;
-            let symbol = pack
-                .manifest
-                .grammar
-                .symbol
-                .clone()
-                .unwrap_or_else(|| pack.name().to_string());
+            let symbol = pack.manifest.grammar.symbol.as_deref().unwrap_or(pack.name());
             Ok(Grammar::Wasm { symbol, bytes })
         }
         GrammarSource::Builtin(name) => match name.as_str() {

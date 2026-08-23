@@ -155,17 +155,7 @@ fn parse_source(
                 .ok_or_else(|| Error::SourceParse { path: target.to_path_buf() })?;
             Ok((tree, language))
         }
-        pack::Grammar::Wasm { symbol, bytes } => {
-            #[cfg(feature = "wasm")]
-            {
-                wasm::parse(pack, &symbol, bytes, target, source)
-            }
-            #[cfg(not(feature = "wasm"))]
-            {
-                let _ = (symbol, bytes, source);
-                Err(Error::WasmUnsupported { pack: pack.name().to_string() })
-            }
-        }
+        pack::Grammar::Wasm { symbol, bytes } => wasm::parse(pack, symbol, bytes, target, source),
     }
 }
 
@@ -187,14 +177,18 @@ mod wasm {
 
     struct ThreadState {
         parser: Parser,
-        /// Compiled languages by export symbol. Assumes one grammar per
-        /// symbol within a run (two packs exporting the same symbol with
-        /// different bytes would collide — the store dedups by name).
-        languages: HashMap<String, Language>,
+        /// Compiled languages by export symbol, plus a fingerprint of the
+        /// module bytes they came from. A store holds one grammar per
+        /// export name, so a second pack reusing a symbol with different
+        /// bytes is a hard error rather than a silent mixup.
+        languages: HashMap<String, (u64, Language)>,
     }
 
     thread_local! {
-        static STATE: RefCell<Option<ThreadState>> = const { RefCell::new(None) };
+        static STATE: RefCell<ThreadState> = RefCell::new(ThreadState {
+            parser: Parser::new(),
+            languages: HashMap::new(),
+        });
     }
 
     fn engine() -> &'static Engine {
@@ -202,26 +196,42 @@ mod wasm {
         ENGINE.get_or_init(Engine::default)
     }
 
+    fn fingerprint(bytes: &[u8]) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        bytes.hash(&mut h);
+        h.finish()
+    }
+
     pub fn parse(pack: &Pack, symbol: &str, bytes: &[u8], target: &Path, source: &str) -> Result<(Tree, Language)> {
         let err = |e: String| Error::WasmGrammar { pack: pack.name().to_string(), message: e };
-        STATE.with_borrow_mut(|slot| {
-            let state = match slot {
-                Some(state) => state,
-                None => slot.insert(ThreadState { parser: Parser::new(), languages: HashMap::new() }),
-            };
-            if !state.languages.contains_key(symbol) {
-                // Loading needs the store back from the parser (or a fresh
-                // one on this thread's first wasm parse).
-                let mut store = match state.parser.take_wasm_store() {
-                    Some(store) => store,
-                    None => WasmStore::new(engine()).map_err(|e| err(e.to_string()))?,
-                };
-                let language =
-                    store.load_language(symbol, bytes).map_err(|e| err(e.to_string()))?;
-                state.parser.set_wasm_store(store).map_err(|e| err(e.to_string()))?;
-                state.languages.insert(symbol.to_string(), language);
+        STATE.with_borrow_mut(|state| {
+            let print = fingerprint(bytes);
+            match state.languages.get(symbol) {
+                Some((cached, _)) if *cached != print => {
+                    return Err(err(format!(
+                        "another pack already loaded a different grammar exporting \
+                         `tree_sitter_{symbol}`; give one pack a distinct symbol"
+                    )));
+                }
+                Some(_) => {}
+                None => {
+                    // Loading needs the store back from the parser (or a
+                    // fresh one on this thread's first wasm parse).
+                    let mut store = match state.parser.take_wasm_store() {
+                        Some(store) => store,
+                        None => WasmStore::new(engine()).map_err(|e| err(e.to_string()))?,
+                    };
+                    let loaded = store.load_language(symbol, bytes);
+                    // The store goes back into the parser even when loading
+                    // fails; dropping it here would orphan every language
+                    // already compiled on this thread.
+                    state.parser.set_wasm_store(store).map_err(|e| err(e.to_string()))?;
+                    let language = loaded.map_err(|e| err(e.to_string()))?;
+                    state.languages.insert(symbol.to_string(), (print, language));
+                }
             }
-            let language = state.languages[symbol].clone();
+            let language = state.languages[symbol].1.clone();
             state.parser.set_language(&language)?;
             let tree = state
                 .parser
@@ -229,6 +239,25 @@ mod wasm {
                 .ok_or_else(|| Error::SourceParse { path: target.to_path_buf() })?;
             Ok((tree, language))
         })
+    }
+}
+
+/// Stub with `wasm::parse`'s signature, so `parse_source` needs no
+/// feature-conditional code: without the `wasm` feature, wasm packs fail
+/// with an actionable per-file error.
+#[cfg(not(feature = "wasm"))]
+mod wasm {
+    use super::{Error, Pack, Result};
+    use std::path::Path;
+
+    pub fn parse(
+        pack: &Pack,
+        _symbol: &str,
+        _bytes: &[u8],
+        _target: &Path,
+        _source: &str,
+    ) -> Result<(tree_sitter::Tree, tree_sitter::Language)> {
+        Err(Error::WasmUnsupported { pack: pack.name().to_string() })
     }
 }
 

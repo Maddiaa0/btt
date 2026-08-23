@@ -143,6 +143,33 @@ def repeated_text(text: str, required_characters: int) -> str:
     return html.escape(text * repeats).rstrip()
 
 
+def sway_animations(branch: Branch) -> str:
+    """Express the canvas wind equation as three additive sine waves."""
+    amplitude = 0.015 + branch.depth * 0.022
+    # (0.6 + 0.4 sin(0.33t)) sin(1.1t + p) expands to these terms.
+    components = (
+        (0.6, 1.1, branch.phase),
+        (0.2, 0.77, branch.phase + math.pi / 2),
+        (0.2, 1.43, branch.phase - math.pi / 2),
+    )
+    animations = []
+    for scale, frequency, phase in components:
+        degrees = math.degrees(amplitude * scale)
+        values = ";".join(
+            f"{degrees * math.sin(2 * math.pi * sample / 8):.3f}"
+            for sample in range(9)
+        )
+        duration = 2 * math.pi / frequency
+        delay = -((phase % (2 * math.pi)) / frequency)
+        animations.append(
+            '<animateTransform class="motion" attributeName="transform" '
+            'type="rotate" additive="sum" '
+            f'values="{values}" dur="{duration:.4f}s" begin="{delay:.4f}s" '
+            'repeatCount="indefinite"/>'
+        )
+    return "".join(animations)
+
+
 def render_tree(tree: Tree, tree_index: int) -> str:
     children: dict[int, list[int]] = {}
     for index, branch in enumerate(tree.branches):
@@ -158,26 +185,26 @@ def render_tree(tree: Tree, tree_index: int) -> str:
         step = font_size * 0.64
         character_count = max(2, int(branch.length / step))
         rate = 3.2 + branch.depth * 1.4
-        flow_duration = 1 / rate
+        text_length = len(branch.text)
+        flow_duration = text_length / rate
         branch_id = f"branch-{tree_index}-{index}"
         base_degrees = math.degrees(
             (-math.pi / 2 if branch.parent < 0 else 0) + branch.angle_off
         )
-        sway_degrees = math.degrees(0.015 + branch.depth * 0.022)
-        sway_delay = -(branch.phase / 1.1)
-        phase_offset = -(branch.phase * 5 % 1) * flow_duration
+        phase_offset = -((branch.phase * 5) % text_length) / rate
+        flow_values = ";".join(
+            f"{-offset * step:.2f}" for offset in range(text_length + 1)
+        )
         text = repeated_text(branch.text, character_count)
 
         descendants = "".join(render_branch(child) for child in children.get(index, []))
         return f'''<g transform="rotate({base_degrees:.3f})">
-          <animateTransform class="motion" attributeName="transform" type="rotate" additive="sum"
-            values="{-sway_degrees:.3f};{sway_degrees:.3f};{-sway_degrees:.3f}"
-            dur="5.712s" begin="{sway_delay:.3f}s" repeatCount="indefinite"/>
+          {sway_animations(branch)}
           <path id="{branch_id}" d="M0 0H{branch.length:.2f}" fill="none"/>
-          <text font-size="{font_size:.2f}" font-weight="{weight}" opacity="{opacity:.2f}" xml:space="preserve">
+          <text font-size="{font_size:.2f}" font-weight="{weight}" opacity="{opacity:.2f}" letter-spacing="0.04em" xml:space="preserve">
             <textPath href="#{branch_id}" startOffset="0">{text}
-              <animate class="motion" attributeName="startOffset" values="0;{-step:.2f}"
-                dur="{flow_duration:.4f}s" begin="{phase_offset:.4f}s" repeatCount="indefinite"/>
+              <animate class="motion" attributeName="startOffset" values="{flow_values}"
+                calcMode="discrete" dur="{flow_duration:.4f}s" begin="{phase_offset:.4f}s" repeatCount="indefinite"/>
             </textPath>
           </text>
           <g transform="translate({branch.length:.2f} 0)">{descendants}</g>
@@ -200,26 +227,31 @@ def render_falling_glyphs(trees: list[Tree]) -> str:
 
     for index in range(50):
         # Consume the same five random values as the canvas initializer.
-        initial_x = GROVE_LEFT + leaf_random.next() * GROVE_WIDTH
-        initial_y = leaf_random.next() * GROUND
+        leaf_random.next()
+        leaf_random.next()
         velocity = 0.25 + leaf_random.next() * 0.5
         phase = leaf_random.next() * 6.28
         character = characters[int(leaf_random.next() * 9)]
 
         tip = tips[(index * 47 + 11) % len(tips)]
-        start_x = tip[0] if index >= 18 else initial_x
-        start_y = tip[1] if index >= 18 else initial_y
+        start_x, start_y = tip
         fall_distance = max(40, GROUND + 4 - start_y)
         duration = max(8, fall_distance / (velocity * 30))
-        drift = 10 + 18 * math.sin(phase)
-        end_x = max(GROVE_LEFT, min(GROVE_LEFT + GROVE_WIDTH, start_x + drift))
-        control_x = start_x - drift * 0.7
         delay = -(phase / 6.28) * duration
+        positions = []
+        for sample in range(41):
+            elapsed = duration * sample / 40
+            x = start_x + (15 / 1.4) * (
+                math.cos(phase) - math.cos(elapsed * 1.4 + phase)
+            )
+            y = start_y + fall_distance * sample / 40
+            positions.append(f"{x:.2f} {y:.2f}")
+        fade_start = max(0, (fall_distance - 60) / fall_distance)
         leaves.append(
             f'''<text class="falling-glyph motion" x="0" y="0">{html.escape(character)}
-              <animateMotion path="M{start_x:.2f},{start_y:.2f} C{control_x:.2f},{start_y + fall_distance * 0.36:.2f} {end_x + drift * 0.5:.2f},{start_y + fall_distance * 0.7:.2f} {end_x:.2f},{GROUND + 4:.2f}"
+              <animateTransform attributeName="transform" type="translate" values="{';'.join(positions)}"
                 dur="{duration:.2f}s" begin="{delay:.2f}s" repeatCount="indefinite"/>
-              <animate attributeName="opacity" values="0.4;0.4;0" keyTimes="0;0.86;1"
+              <animate attributeName="opacity" values="0.4;0.4;0" keyTimes="0;{fade_start:.3f};1"
                 dur="{duration:.2f}s" begin="{delay:.2f}s" repeatCount="indefinite"/>
             </text>'''
         )
@@ -279,11 +311,6 @@ svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{HEIGH
     <text x="560" y="930" font-size="17" font-style="italic" font-weight="300" fill="#4a463e">extendible toolbox for a branch tree testing; understand</text>
     <text x="560" y="951" font-size="17" font-style="italic" font-weight="300" fill="#4a463e">the code's tests at a glance</text>
   </g>
-  <g text-anchor="middle" font-family="'IBM Plex Mono', 'Courier New', monospace">
-    <text x="560" y="1007" font-size="14" fill="#6d675c">cargo install --git https://github.com/Maddiaa0/btt</text>
-    <text x="560" y="1041" font-size="12" fill="#a5a093" letter-spacing="2.5">github   readme   mit</text>
-  </g>
-
   <text x="920" y="825" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="14" line-height="1.55" fill="#4a463e">{checker_tspans}</text>
 </svg>
 '''

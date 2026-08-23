@@ -165,6 +165,29 @@ mod when_scaffolding_hostile_spec_text {
     }
 }
 
+mod when_a_scaffolded_file_is_checked {
+    use super::*;
+
+    // The scaffold → check round trip is a contract: whatever escaping the
+    // template applies, extraction must undo — otherwise scaffolding a
+    // hostile title produces a file the tool itself then flags. U+2028 is
+    // a JS line terminator; quotes and backslashes exercise escaping.
+    #[test]
+    fn reports_no_findings_for_hostile_titles() {
+        let spec = "HashMap\n└── it returns \"yes\" \\ {ok}\u{2028}more\n";
+        let trees = tree::parse(spec).unwrap();
+        for (name, target) in [("typescript", "map.test.ts"), ("rust", "map.rs")] {
+            let p = pack::load(name, repo_root()).unwrap();
+            let expected = check::expected_from_spec(&trees, &p.manifest.mapping);
+            let out = scaffold::render(&p, &expected, "map").unwrap();
+            let actual = extract::extract(&p, Path::new(target), &out).unwrap();
+            let actual = check::unwrap_wrappers(actual, &p.manifest.mapping.wrappers);
+            let findings = check::diff(&expected, &actual);
+            assert!(findings.is_empty(), "{name}: {findings:?}\n---\n{out}");
+        }
+    }
+}
+
 mod when_a_builtin_pack_has_a_wasm_twin {
     use super::*;
 

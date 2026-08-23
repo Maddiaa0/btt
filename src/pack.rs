@@ -105,6 +105,19 @@ pub struct GrammarConfig {
     pub symbol: Option<String>,
 }
 
+/// How the source text of a `@*.name` capture maps to a plain title.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NameSyntax {
+    /// The captured text is the name itself (identifiers).
+    #[default]
+    Raw,
+    /// The capture is a JS string literal: quotes are stripped and escape
+    /// sequences decoded, so titles compare by value, not by the escaping
+    /// a scaffold (or author) happened to use.
+    JsString,
+}
+
 /// Extraction section of a pack manifest.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -116,6 +129,9 @@ pub struct Extract {
     /// precedes it among its siblings.
     #[serde(default)]
     pub test_requires_marker: bool,
+    /// How `@*.name` captures decode to titles.
+    #[serde(default)]
+    pub name_syntax: NameSyntax,
 }
 
 /// Scaffold section of a pack manifest.
@@ -177,6 +193,44 @@ impl fmt::Display for Origin {
     }
 }
 
+/// A pack's wasm grammar module, content-hashed at construction.
+///
+/// The per-thread language cache keys on `(symbol, hash)` — module
+/// *identity*, not name — so a library caller who validates two pack sets
+/// separately can never be served one set's grammar under the other set's
+/// symbol. Constructing the hash here means it cannot drift from the
+/// bytes. (`DefaultHasher` is cache identity under the trusted-pack model,
+/// not an adversarial digest.)
+#[derive(Debug)]
+pub struct WasmGrammar {
+    bytes: Vec<u8>,
+    hash: u64,
+}
+
+impl WasmGrammar {
+    /// Wrap a compiled grammar module, computing its content hash.
+    #[must_use]
+    pub fn new(bytes: Vec<u8>) -> Self {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        bytes.hash(&mut hasher);
+        let hash = hasher.finish();
+        Self { bytes, hash }
+    }
+
+    /// The module bytes.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// The content hash of the module bytes.
+    #[must_use]
+    pub fn hash(&self) -> u64 {
+        self.hash
+    }
+}
+
 /// A fully loaded pack: manifest plus the file contents it references.
 #[derive(Debug)]
 pub struct Pack {
@@ -186,8 +240,8 @@ pub struct Pack {
     pub query: String,
     /// Contents of the scaffold template.
     pub template: String,
-    /// Bytes of the pack's WASM grammar, when it ships one.
-    pub wasm_grammar: Option<Vec<u8>>,
+    /// The pack's WASM grammar, when it ships one.
+    pub wasm_grammar: Option<WasmGrammar>,
     /// Where this pack was resolved from.
     pub origin: Origin,
 }
@@ -232,6 +286,20 @@ fn validate(manifest: &Manifest) -> Result<()> {
     }
     for target in &manifest.detect.targets {
         confine(pack, "detect.targets", target)?;
+        // Forward routing replaces every `{stem}`; reverse (uncovered)
+        // matching splits on the first, against the file name only. A
+        // pattern the two directions disagree on would corrupt coverage,
+        // so only reversible patterns load: exactly one `{stem}`, no
+        // directory components.
+        let reversible = target.matches("{stem}").count() == 1
+            && !target.contains('/')
+            && !target.contains('\\');
+        if !reversible {
+            return Err(Error::InvalidTargetPattern {
+                pack: pack.clone(),
+                pattern: target.clone(),
+            });
+        }
     }
     Ok(())
 }
@@ -243,16 +311,21 @@ fn validate(manifest: &Manifest) -> Result<()> {
 /// deterministic — a per-thread check would report the collision or not
 /// depending on which worker touched which pack first.
 ///
+/// This is a diagnostic, not a safety mechanism: the per-thread language
+/// cache keys on module content ([`WasmGrammar`]), so a colliding setup
+/// that skips this check still parses each pack with its own grammar. The
+/// pre-flight exists to name the confusing setup clearly instead.
+///
 /// # Errors
 ///
 /// Returns [`Error::GrammarSymbolCollision`] naming both packs.
 pub fn validate_set(packs: &[Pack]) -> Result<()> {
-    let mut seen: BTreeMap<&str, &Pack> = BTreeMap::new();
+    let mut seen: BTreeMap<&str, (&Pack, &WasmGrammar)> = BTreeMap::new();
     for pack in packs {
         if !matches!(pack.manifest.grammar.source, GrammarSource::Wasm(_)) {
             continue;
         }
-        let Some(bytes) = pack.wasm_grammar.as_deref() else {
+        let Some(grammar) = pack.wasm_grammar.as_ref() else {
             continue; // missing grammar file: surfaces per file at parse time
         };
         let symbol = pack
@@ -262,7 +335,7 @@ pub fn validate_set(packs: &[Pack]) -> Result<()> {
             .as_deref()
             .unwrap_or(pack.name());
         match seen.get(symbol) {
-            Some(first) if first.wasm_grammar.as_deref() != Some(bytes) => {
+            Some((first, first_grammar)) if first_grammar.bytes() != grammar.bytes() => {
                 return Err(Error::GrammarSymbolCollision {
                     symbol: symbol.to_string(),
                     first: first.name().to_string(),
@@ -271,7 +344,7 @@ pub fn validate_set(packs: &[Pack]) -> Result<()> {
             }
             Some(_) => {}
             None => {
-                seen.insert(symbol, pack);
+                seen.insert(symbol, (pack, grammar));
             }
         }
     }
@@ -305,7 +378,14 @@ fn resolve_inside(dir: &Path, rel: &Path, pack: &str, field: &'static str) -> Re
 }
 
 fn load_from_dir(dir: &Path, origin: Origin) -> Result<Pack> {
-    let manifest_path = dir.join("pack.toml");
+    // The manifest gets the same symlink confinement as the files it
+    // names; its pack name is unknown until parsed, so errors carry the
+    // directory name instead.
+    let label = dir.file_name().map_or_else(
+        || dir.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    let manifest_path = resolve_inside(dir, Path::new("pack.toml"), &label, "pack.toml")?;
     let manifest: Manifest =
         toml::from_str(&read(&manifest_path)?).map_err(|source| Error::Toml {
             path: manifest_path,
@@ -327,7 +407,7 @@ fn load_from_dir(dir: &Path, origin: Origin) -> Result<Pack> {
     )?)?;
     let wasm_grammar = match &manifest.grammar.source {
         GrammarSource::Wasm(file) => match resolve_inside(dir, file, &name, "grammar.source") {
-            Ok(real) => std::fs::read(real).ok(),
+            Ok(real) => std::fs::read(real).ok().map(WasmGrammar::new),
             // An escaping symlink is a hard error; a merely missing or
             // unreadable grammar surfaces per file at parse time, so one
             // broken wasm pack can't abort a whole run.
@@ -378,7 +458,7 @@ fn load_embedded(dir: &Dir<'static>) -> Result<Pack> {
     let wasm_grammar = match &manifest.grammar.source {
         GrammarSource::Wasm(file) => dir
             .get_file(dir.path().join(file))
-            .map(|f| f.contents().to_vec()),
+            .map(|f| WasmGrammar::new(f.contents().to_vec())),
         GrammarSource::Builtin(_) => None,
     };
     Ok(Pack {
@@ -509,6 +589,8 @@ pub enum Grammar<'a> {
         symbol: &'a str,
         /// The compiled grammar module.
         bytes: &'a [u8],
+        /// Content hash of `bytes` — the cache identity of the module.
+        hash: u64,
     },
 }
 
@@ -521,20 +603,21 @@ pub enum Grammar<'a> {
 pub fn grammar_for<'a>(pack: &'a Pack, target: &Path) -> Result<Grammar<'a>> {
     match &pack.manifest.grammar.source {
         GrammarSource::Wasm(file) => {
-            let bytes = pack
-                .wasm_grammar
-                .as_deref()
-                .ok_or_else(|| Error::PackFile {
-                    pack: pack.name().to_string(),
-                    file: file.display().to_string(),
-                })?;
+            let grammar = pack.wasm_grammar.as_ref().ok_or_else(|| Error::PackFile {
+                pack: pack.name().to_string(),
+                file: file.display().to_string(),
+            })?;
             let symbol = pack
                 .manifest
                 .grammar
                 .symbol
                 .as_deref()
                 .unwrap_or(pack.name());
-            Ok(Grammar::Wasm { symbol, bytes })
+            Ok(Grammar::Wasm {
+                symbol,
+                bytes: grammar.bytes(),
+                hash: grammar.hash(),
+            })
         }
         GrammarSource::Builtin(name) => match name.as_str() {
             "rust" => Ok(Grammar::Native(tree_sitter_rust::LANGUAGE.into())),

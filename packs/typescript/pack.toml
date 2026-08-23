@@ -18,6 +18,7 @@ source = "builtin:typescript"
 
 [extract]
 query = "queries/tests.scm"
+name_syntax = "js-string"
 
 [mapping]
 # The tree root must appear as a top-level describe block.

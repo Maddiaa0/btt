@@ -13,7 +13,7 @@ mod when_checking_btt_against_its_own_trees {
     fn finds_no_drift() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         let packs = vec![pack::load("rust", root).unwrap()];
-        let tree_files = runner::find_tree_files(&[root.join("src"), root.join("tests")]);
+        let tree_files = runner::find_tree_files(&[root.join("src"), root.join("tests")]).unwrap();
         assert!(!tree_files.is_empty(), "no .tree files found in repo");
 
         let mut problems = Vec::new();

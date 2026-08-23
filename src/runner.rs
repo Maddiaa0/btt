@@ -11,8 +11,15 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 /// Find all `.tree` files under the given paths (files pass through as-is).
-#[must_use]
-pub fn find_tree_files(paths: &[PathBuf]) -> Vec<PathBuf> {
+///
+/// Fails closed: a search path that does not exist or a directory that
+/// cannot be read is an error, never an empty result — "no .tree files
+/// found" must not be the report for a mistyped path.
+///
+/// # Errors
+///
+/// Returns the first walk error (missing path, unreadable directory).
+pub fn find_tree_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     for path in paths {
         if path.is_file() {
@@ -24,7 +31,8 @@ pub fn find_tree_files(paths: &[PathBuf]) -> Vec<PathBuf> {
             !(e.file_type().is_dir()
                 && (name == ".git" || name == "target" || name == "node_modules"))
         });
-        for entry in walker.flatten() {
+        for entry in walker {
+            let entry = entry.map_err(|e| walk_error(path, e))?;
             if entry.file_type().is_file() && entry.path().extension().is_some_and(|e| e == "tree")
             {
                 out.push(entry.into_path());
@@ -33,7 +41,18 @@ pub fn find_tree_files(paths: &[PathBuf]) -> Vec<PathBuf> {
     }
     out.sort();
     out.dedup();
-    out
+    Ok(out)
+}
+
+/// Convert a walk error into a typed I/O error at the most specific path.
+fn walk_error(root: &Path, e: walkdir::Error) -> Error {
+    let path = e
+        .path()
+        .map_or_else(|| root.to_path_buf(), Path::to_path_buf);
+    let source = e
+        .into_io_error()
+        .unwrap_or_else(|| std::io::Error::other("filesystem loop"));
+    Error::io(path, source)
 }
 
 /// A test-bearing source file that no `.tree` spec covers.
@@ -69,10 +88,10 @@ fn count_actual_tests(nodes: &[extract::ActualNode]) -> usize {
 pub struct UncoveredScan {
     /// Test-bearing files no tree routes to, in path order.
     pub uncovered: Vec<Uncovered>,
-    /// Candidates that could not be scanned (unreadable, grammar
-    /// unavailable, …). Unverifiable coverage is a tool failure, not an
-    /// absence of findings — strict projects must not pass because
-    /// extraction broke.
+    /// Candidates that could not be scanned (unreadable file or directory,
+    /// grammar unavailable, …). Unverifiable coverage is a tool failure,
+    /// not an absence of findings — strict projects must not pass because
+    /// extraction or the directory walk broke.
     pub failed: Vec<(PathBuf, Error)>,
 }
 
@@ -98,13 +117,25 @@ pub fn find_uncovered(packs: &[Pack], paths: &[PathBuf], tree_files: &[PathBuf])
         .collect();
 
     let mut candidates: Vec<(PathBuf, &Pack)> = Vec::new();
+    let mut walk_failures: Vec<(PathBuf, Error)> = Vec::new();
     for path in paths {
         let walker = WalkDir::new(path).into_iter().filter_entry(|e| {
             let name = e.file_name().to_string_lossy();
             !(e.file_type().is_dir()
                 && (name == ".git" || name == "target" || name == "node_modules"))
         });
-        for entry in walker.flatten() {
+        for entry in walker {
+            let entry = match entry {
+                Ok(entry) => entry,
+                // A directory that cannot be walked hides an unknown
+                // number of candidates: record it as a failure so strict
+                // projects fail instead of passing blind.
+                Err(e) => {
+                    let at = e.path().map_or_else(|| path.clone(), Path::to_path_buf);
+                    walk_failures.push((at, walk_error(path, e)));
+                    continue;
+                }
+            };
             if !entry.file_type().is_file() {
                 continue;
             }
@@ -140,6 +171,7 @@ pub fn find_uncovered(packs: &[Pack], paths: &[PathBuf], tree_files: &[PathBuf])
         .collect();
 
     let mut scan = UncoveredScan::default();
+    scan.failed.extend(walk_failures);
     for (path, result) in results {
         match result {
             Ok(tests) if tests > 0 => scan.uncovered.push(Uncovered { path, tests }),

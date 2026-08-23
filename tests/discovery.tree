@@ -1,0 +1,4 @@
+discovery
+└── when a search path does not exist
+    ├── it fails tree discovery as a tool error
+    └── it is reported as failed by the uncovered scan

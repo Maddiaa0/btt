@@ -68,7 +68,19 @@ pub fn render(pack: &Pack, expected: &[Expected], stem: &str) -> Result<String> 
     // descriptions are arbitrary text; without these, a quote in a title
     // produces a scaffold that does not compile.
     env.add_filter("js_string", |s: String| {
-        s.replace('\\', "\\\\").replace('"', "\\\"")
+        s.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            // U+2028/U+2029 are line terminators in JavaScript; escaped,
+            // they stay string data on every parser.
+            .replace('\u{2028}', "\\u2028")
+            .replace('\u{2029}', "\\u2029")
+    });
+    // JS line comments end at *any* line terminator: spec text quoted in a
+    // comment must not be able to end the comment and become code.
+    env.add_filter("line_safe", |s: String| {
+        s.replace(['\r', '\n'], " ")
+            .replace('\u{2028}', "\\u2028")
+            .replace('\u{2029}', "\\u2029")
     });
     // Rust string literals that are also format strings (todo!) need brace
     // doubling on top of quote/backslash escaping.

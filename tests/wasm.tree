@@ -5,5 +5,7 @@ wasm grammar equivalence
 │   └── it matches the native extraction
 ├── when a wasm grammar fails to load
 │   └── it does not poison other grammars on the thread
-└── when two packs share a grammar symbol
-    └── it reports a collision instead of reusing the wrong grammar
+├── when two packs share a grammar symbol
+│   └── it reports a collision instead of reusing the wrong grammar
+└── when two pack sets reuse a symbol in one process
+    └── it never serves another modules cached grammar

@@ -61,6 +61,7 @@ mod when_a_pack_manifest_references_paths_outside_its_directory {
     }
 }
 
+#[cfg(unix)]
 mod when_a_pack_file_is_a_symlink_escaping_the_pack {
     use super::*;
 
@@ -77,6 +78,20 @@ mod when_a_pack_file_is_a_symlink_escaping_the_pack {
         let err = pack::load_dir(&dir).unwrap_err();
         assert!(matches!(err, Error::UnsafePath { .. }), "{err}");
     }
+
+    // The manifest itself is pack-controlled input too — it gets the same
+    // resolution containment as the files it names.
+    #[test]
+    fn refuses_a_symlinked_manifest() {
+        let dir = fixture_pack("symlink-manifest", ToString::to_string);
+        let outside = repo_root().join("target/hardening-fixtures/outside.toml");
+        std::fs::write(&outside, VALID_MANIFEST).unwrap();
+        std::fs::remove_file(dir.join("pack.toml")).unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join("pack.toml")).unwrap();
+
+        let err = pack::load_dir(&dir).unwrap_err();
+        assert!(matches!(err, Error::UnsafePath { .. }), "{err}");
+    }
 }
 
 mod when_a_pack_name_is_not_a_single_path_component {
@@ -87,6 +102,30 @@ mod when_a_pack_name_is_not_a_single_path_component {
         for name in ["../evil", "a/b", "/abs", ".."] {
             let err = pack::load(name, repo_root()).unwrap_err();
             assert!(matches!(err, Error::UnsafePath { .. }), "{name}: {err}");
+        }
+    }
+}
+
+mod when_a_target_pattern_is_not_reversible {
+    use super::*;
+
+    // Forward routing replaces every `{stem}`; reverse (uncovered)
+    // matching splits on the first, against the file name only. Patterns
+    // the two directions disagree on would corrupt coverage.
+    #[test]
+    fn refuses_to_load() {
+        for pattern in ["{stem}-{stem}.rs", "fixed.rs", "sub/{stem}.rs"] {
+            let dir = fixture_pack("bad-target", |m| {
+                m.replace(
+                    "targets = [\"{stem}.rs\"]",
+                    &format!("targets = [\"{pattern}\"]"),
+                )
+            });
+            let err = pack::load_dir(&dir).unwrap_err();
+            assert!(
+                matches!(err, Error::InvalidTargetPattern { .. }),
+                "{pattern}: {err}"
+            );
         }
     }
 }

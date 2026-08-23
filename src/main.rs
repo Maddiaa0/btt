@@ -124,7 +124,7 @@ fn cmd_check(
     } else {
         paths.to_vec()
     };
-    let tree_files = runner::find_tree_files(&search);
+    let tree_files = runner::find_tree_files(&search)?;
 
     let run = || {
         let outcomes = runner::check_all(&packs, &tree_files, cfg.check);

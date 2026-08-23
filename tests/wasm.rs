@@ -110,7 +110,7 @@ mod when_a_wasm_grammar_fails_to_load {
         assert!(!first.is_empty());
 
         let mut bad = wasm_pack("rust");
-        bad.wasm_grammar = Some(vec![0x00, 0x61, 0x73, 0x6d]); // truncated module
+        bad.wasm_grammar = Some(pack::WasmGrammar::new(vec![0x00, 0x61, 0x73, 0x6d])); // truncated module
         extract::extract(&bad, Path::new("map.rs"), RUST_SOURCE).unwrap_err();
 
         let again = extract::extract(&good, Path::new("map.test.ts"), TS_SOURCE).unwrap();
@@ -135,5 +135,29 @@ mod when_two_packs_share_a_grammar_symbol {
 
         // Same symbol, same bytes is not a collision.
         pack::validate_set(&[wasm_pack("typescript"), wasm_pack("typescript")]).unwrap();
+    }
+}
+
+mod when_two_pack_sets_reuse_a_symbol_in_one_process {
+    use super::*;
+
+    // Library callers validate pack *sets* independently — nothing stops a
+    // later set from reusing an earlier set's symbol for a different
+    // module. The per-thread cache keys on module content, so the second
+    // set must get its own (here: failing) load, never the first set's
+    // cached grammar. Must run on one thread (= one #[test] fn).
+    #[test]
+    fn never_serves_another_modules_cached_grammar() {
+        let real = wasm_pack("rust");
+        let first = extract::extract(&real, Path::new("map.rs"), RUST_SOURCE).unwrap();
+        assert!(!first.is_empty());
+
+        let mut imposter = wasm_pack("rust");
+        imposter.wasm_grammar = Some(pack::WasmGrammar::new(b"\0asm not a module".to_vec()));
+        extract::extract(&imposter, Path::new("map.rs"), RUST_SOURCE)
+            .expect_err("a symbol-keyed cache would silently reuse the real grammar");
+
+        let again = extract::extract(&real, Path::new("map.rs"), RUST_SOURCE).unwrap();
+        assert_eq!(first, again);
     }
 }

@@ -56,6 +56,17 @@ pub enum Error {
         value: String,
     },
 
+    /// A target pattern that forward and reverse routing would disagree on.
+    #[error(
+        "pack `{pack}`: target pattern `{pattern}` must contain exactly one {{stem}} and no directory separators"
+    )]
+    InvalidTargetPattern {
+        /// The pack with the bad pattern.
+        pack: String,
+        /// The offending pattern.
+        pattern: String,
+    },
+
     /// A file referenced by a pack manifest is missing or not UTF-8.
     #[error("pack `{pack}`: missing or invalid file `{file}`")]
     PackFile {

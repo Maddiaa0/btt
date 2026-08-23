@@ -2,8 +2,11 @@ pack hardening
 ├── when a pack manifest references paths outside its directory
 │   └── it refuses to load
 ├── when a pack file is a symlink escaping the pack
-│   └── it refuses to load
+│   ├── it refuses to load
+│   └── it refuses a symlinked manifest
 ├── when a pack name is not a single path component
+│   └── it refuses to load
+├── when a target pattern is not reversible
 │   └── it refuses to load
 └── when a manifest contains unknown fields
     └── it refuses to load

@@ -120,7 +120,7 @@ mod when_scaffolding_from_a_tree {
     #[test]
     fn renders_rust_modules_and_test_functions() {
         let (p, expected) = expected_for("rust");
-        let out = scaffold::render(&p, &expected, "map").unwrap();
+        let out = scaffold::render(&p, &expected, "map", false).unwrap();
         assert!(out.contains("mod when_the_key_is_present {"), "{out}");
         assert!(out.contains("fn returns_the_value()"), "{out}");
         assert!(out.contains("#[test]"), "{out}");
@@ -129,7 +129,7 @@ mod when_scaffolding_from_a_tree {
     #[test]
     fn renders_nested_describe_blocks() {
         let (p, expected) = expected_for("typescript");
-        let out = scaffold::render(&p, &expected, "map").unwrap();
+        let out = scaffold::render(&p, &expected, "map", false).unwrap();
         assert!(out.contains(r#"describe("HashMap", () => {"#), "{out}");
         assert!(
             out.contains(r#"  describe("when the key is absent", () => {"#),
@@ -149,7 +149,7 @@ mod when_scaffolding_hostile_spec_text {
 
         let ts = pack::load("typescript", repo_root()).unwrap();
         let expected = check::expected_from_spec(&trees, &ts.manifest.mapping);
-        let out = scaffold::render(&ts, &expected, "map").unwrap();
+        let out = scaffold::render(&ts, &expected, "map", false).unwrap();
         assert!(
             out.contains(r#"it("returns \"yes\" for {braced} input""#),
             "{out}"
@@ -157,7 +157,7 @@ mod when_scaffolding_hostile_spec_text {
 
         let rust = pack::load("rust", repo_root()).unwrap();
         let expected = check::expected_from_spec(&trees, &rust.manifest.mapping);
-        let out = scaffold::render(&rust, &expected, "map").unwrap();
+        let out = scaffold::render(&rust, &expected, "map", false).unwrap();
         assert!(
             out.contains(r#"todo!("it returns \"yes\" for {{braced}} input")"#),
             "{out}"
@@ -179,7 +179,7 @@ mod when_a_scaffolded_file_is_checked {
         for (name, target) in [("typescript", "map.test.ts"), ("rust", "map.rs")] {
             let p = pack::load(name, repo_root()).unwrap();
             let expected = check::expected_from_spec(&trees, &p.manifest.mapping);
-            let out = scaffold::render(&p, &expected, "map").unwrap();
+            let out = scaffold::render(&p, &expected, "map", false).unwrap();
             let actual = extract::extract(&p, Path::new(target), &out).unwrap();
             let actual = check::unwrap_wrappers(actual, &p.manifest.mapping.wrappers);
             let findings = check::diff(&expected, &actual);

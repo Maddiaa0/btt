@@ -1,0 +1,58 @@
+# Lexical twin of the builtin rust pack: no grammar — the [lexical]
+# profile is the entire language definition. The #[test] marker lives in
+# the test opener regex (there is no test_requires_marker sibling walk
+# here). Validated by tests/lexical.rs against the native extraction.
+#
+# Known limits, honestly: no `'` string rule is possible (lifetimes would
+# mask as strings), so char literals containing quotes, braces, or
+# parens ('"'  '{') confuse the scan and fail closed; raw strings
+# (r#"..."#) and nested block comments are not modeled. Test files that
+# hit those belong on the native grammar.
+
+[pack]
+name = "rust-lexical"
+version = "0.1.0"
+description = "Rust tests via lexical scanning (no grammar): nested mod blocks, #[test] fns"
+
+[detect]
+targets = ["{stem}.rs"]
+
+[grammar]
+source = "lexical"
+
+[extract]
+
+[lexical]
+line_comment = "//"
+block_comment = ["/*", "*/"]
+strings = [{ delim = '"', escape = '\' }]
+nest = [["(", ")"], ["{", "}"]]
+
+# Blocks: any `mod name {` — the body brace inside the match is the span.
+[lexical.block]
+open = '''(?:^|[^\w])(?<kw>mod)\s+(?<name>\w+)\s*\{'''
+
+# Tests: a #[test]-like attribute (#[test], #[tokio::test], #[rstest]),
+# then optional further attributes and doc comments (comments are blanked
+# to whitespace before matching), then the fn. The parameter-list paren
+# is the span.
+[lexical.test]
+open = '''#\[[\w:]*test\]\s*(?:#\[[^\[\]]*\]\s*)*(?:pub\s+)?(?:async\s+)?(?<kw>fn)\s+(?<name>\w+)\s*\('''
+
+[mapping]
+# The tree root is the file itself; top-level conditions become top-level mods.
+root = "file"
+# `#[cfg(test)] mod tests { ... }` wrappers are structurally transparent.
+wrappers = ["tests"]
+
+[mapping.block]
+case = "snake"
+
+[mapping.test]
+strip_prefix = "it "
+case = "snake"
+
+[scaffold]
+template = "templates/test.jinja"
+output = "{stem}.rs"
+indent = "    "

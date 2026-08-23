@@ -56,10 +56,21 @@ fn flatten(nodes: &[Expected], depth: usize, unit: &str, out: &mut Vec<Event>) {
 
 /// Render the pack's scaffold template for the given expected structure.
 ///
+/// `in_tests_dir` tells the template whether the output lands in a
+/// dedicated test directory (a Rust `tests/` integration crate) or next
+/// to source — languages whose test-file shape differs by location (Rust
+/// wraps colocated tests in `#[cfg(test)] mod tests`) branch on it;
+/// other templates ignore it.
+///
 /// # Errors
 ///
 /// Fails if the pack's template does not compile or render.
-pub fn render(pack: &Pack, expected: &[Expected], stem: &str) -> Result<String> {
+pub fn render(
+    pack: &Pack,
+    expected: &[Expected],
+    stem: &str,
+    in_tests_dir: bool,
+) -> Result<String> {
     let mut events = Vec::new();
     flatten(expected, 0, &pack.manifest.scaffold.indent, &mut events);
 
@@ -93,7 +104,7 @@ pub fn render(pack: &Pack, expected: &[Expected], stem: &str) -> Result<String> 
     let out = env
         .render_str(
             &pack.template,
-            minijinja::context! { events => events, stem => stem },
+            minijinja::context! { events => events, stem => stem, in_tests_dir => in_tests_dir },
         )
         .map_err(|source| Error::Template {
             pack: pack.name().to_string(),

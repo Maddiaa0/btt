@@ -167,7 +167,8 @@ prefix-named test conventions (Foundry, Go, pytest-style).
 Be clear-eyed about the tradeoff: **a lexical pack will not be perfect.**
 It is deliberately not a parser — syntax the profile cannot see (JS regex
 literals and template interpolation, Python's indentation nesting, Ruby's
-`do … end`, attribute markers like `#[test]`) is out of scope, by design.
+`do … end`) is out of scope, by design. (Attribute markers like `#[test]`
+*are* covered: the rust profile encodes them in its opener regex.)
 That is the price of the extension story: the whole language definition
 is reviewable text that fits on one screen, installs by dropping a
 folder, and needs no compiled artifact to vet, pin, or distribute. What
@@ -176,9 +177,13 @@ makes the imperfection safe rather than silent is that the scanner
 cannot fully account for (unbalanced brackets, unterminated strings or
 comments) are tool errors, never partial extractions. When a language
 outgrows the profile, the answer is a grammar pack (`wasm:`), not a
-cleverer regex. `packs-lexical/typescript` is differentially fuzzed
-against the native grammar in `tests/lexical.rs` to keep the two
-extraction paths identical on realistic test files.
+cleverer regex. Two profile twins ship in-repo — `packs-lexical/typescript`
+and `packs-lexical/rust` (whose `#[test]` marker lives in the opener
+regex) — and both are differentially fuzzed against their native grammars
+in `tests/lexical.rs` to keep the extraction paths identical on realistic
+test files. Checking btt's own specs with the rust profile passes 10 of
+12 files; the two that embed TypeScript sources in raw strings
+(`r#"…"#`, unmodeled) fail closed with a line number.
 
 ## Configuration
 
@@ -218,6 +223,13 @@ uncovered = "error"
 | `btt scaffold <tree>` | generate a skeleton (`--stdout`, `--force`, `--pack`) |
 | `btt packs` | list packs and where they resolve from |
 | `btt init [--skill]` | write `btt.toml` (+ Claude skill for agents) |
+
+Scaffold output is location-aware where a language has more than one
+test-file shape: for Rust, a target under `tests/` (an integration
+crate, already all test code) scaffolds flat, while anywhere else the
+skeleton is wrapped in `#[cfg(test)] mod tests { … }`. Both shapes check
+identically — the pack declares `tests` as a structurally transparent
+wrapper.
 
 ## Benchmarks
 

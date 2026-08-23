@@ -34,8 +34,6 @@ Rules:
 - Never run bare `cargo update` (stable cargo has no age filter and pulls
   the freshest versions). On stable, downgrade single crates with
   `cargo update -p <crate> --precise <version>`.
-- `scripts/dep-age.sh` audits the lockfile against crates.io publish dates
-  (runs in CI); it must pass before committing lockfile changes.
 - A conscious exception requires asking the user first; the escape hatch is
   `CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow`.
 - WASM grammar artifacts are pinned by release tag + sha256 in

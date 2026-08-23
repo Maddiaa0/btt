@@ -84,6 +84,19 @@ pub enum Error {
         pack: String,
     },
 
+    /// Two packs ship different wasm grammar modules under one symbol.
+    #[error(
+        "packs `{first}` and `{second}` both export `tree_sitter_{symbol}` with different grammars; give one a distinct symbol"
+    )]
+    GrammarSymbolCollision {
+        /// The contested export symbol.
+        symbol: String,
+        /// The pack that claimed the symbol first (load order).
+        first: String,
+        /// The pack that collided with it.
+        second: String,
+    },
+
     /// Loading or instantiating a pack's WASM grammar failed.
     #[error("pack `{pack}`: wasm grammar error: {message}")]
     WasmGrammar {

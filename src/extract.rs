@@ -186,11 +186,11 @@ mod wasm {
 
     struct ThreadState {
         parser: Parser,
-        /// Compiled languages by export symbol, plus a fingerprint of the
-        /// module bytes they came from. A store holds one grammar per
-        /// export name, so a second pack reusing a symbol with different
-        /// bytes is a hard error rather than a silent mixup.
-        languages: HashMap<String, (u64, Language)>,
+        /// Compiled languages by export symbol. Symbol uniqueness across a
+        /// pack set is validated once, deterministically, before any
+        /// parallel work (`pack::validate_set`) — so a cache hit here is
+        /// always the right grammar.
+        languages: HashMap<String, Language>,
     }
 
     thread_local! {
@@ -205,13 +205,6 @@ mod wasm {
         ENGINE.get_or_init(Engine::default)
     }
 
-    fn fingerprint(bytes: &[u8]) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        bytes.hash(&mut h);
-        h.finish()
-    }
-
     pub fn parse(
         pack: &Pack,
         symbol: &str,
@@ -224,37 +217,25 @@ mod wasm {
             message: e,
         };
         STATE.with_borrow_mut(|state| {
-            let print = fingerprint(bytes);
-            match state.languages.get(symbol) {
-                Some((cached, _)) if *cached != print => {
-                    return Err(err(format!(
-                        "another pack already loaded a different grammar exporting \
-                         `tree_sitter_{symbol}`; give one pack a distinct symbol"
-                    )));
-                }
-                Some(_) => {}
-                None => {
-                    // Loading needs the store back from the parser (or a
-                    // fresh one on this thread's first wasm parse).
-                    let mut store = match state.parser.take_wasm_store() {
-                        Some(store) => store,
-                        None => WasmStore::new(engine()).map_err(|e| err(e.to_string()))?,
-                    };
-                    let loaded = store.load_language(symbol, bytes);
-                    // The store goes back into the parser even when loading
-                    // fails; dropping it here would orphan every language
-                    // already compiled on this thread.
-                    state
-                        .parser
-                        .set_wasm_store(store)
-                        .map_err(|e| err(e.to_string()))?;
-                    let language = loaded.map_err(|e| err(e.to_string()))?;
-                    state
-                        .languages
-                        .insert(symbol.to_string(), (print, language));
-                }
+            if !state.languages.contains_key(symbol) {
+                // Loading needs the store back from the parser (or a
+                // fresh one on this thread's first wasm parse).
+                let mut store = match state.parser.take_wasm_store() {
+                    Some(store) => store,
+                    None => WasmStore::new(engine()).map_err(|e| err(e.to_string()))?,
+                };
+                let loaded = store.load_language(symbol, bytes);
+                // The store goes back into the parser even when loading
+                // fails; dropping it here would orphan every language
+                // already compiled on this thread.
+                state
+                    .parser
+                    .set_wasm_store(store)
+                    .map_err(|e| err(e.to_string()))?;
+                let language = loaded.map_err(|e| err(e.to_string()))?;
+                state.languages.insert(symbol.to_string(), language);
             }
-            let language = state.languages[symbol].1.clone();
+            let language = state.languages[symbol].clone();
             state.parser.set_language(&language)?;
             let tree = state
                 .parser

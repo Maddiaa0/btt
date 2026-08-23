@@ -121,19 +121,19 @@ mod when_a_wasm_grammar_fails_to_load {
 mod when_two_packs_share_a_grammar_symbol {
     use super::*;
 
+    // The check is a deterministic pre-flight over the whole pack set —
+    // never a per-thread cache probe, whose outcome would depend on which
+    // rayon worker touched which pack first (same project could pass under
+    // -j2 and fail under -j1).
     #[test]
     fn reports_a_collision_instead_of_reusing_the_wrong_grammar() {
         let ts = wasm_pack("typescript");
-        assert!(
-            !extract::extract(&ts, Path::new("map.test.ts"), TS_SOURCE)
-                .unwrap()
-                .is_empty()
-        );
-
-        // A different grammar claiming the already-loaded symbol.
         let mut imposter = wasm_pack("rust");
         imposter.manifest.grammar.symbol = Some("typescript".to_string());
-        let err = extract::extract(&imposter, Path::new("map.rs"), RUST_SOURCE).unwrap_err();
+        let err = pack::validate_set(&[ts, imposter]).unwrap_err();
         assert!(err.to_string().contains("distinct symbol"), "{err}");
+
+        // Same symbol, same bytes is not a collision.
+        pack::validate_set(&[wasm_pack("typescript"), wasm_pack("typescript")]).unwrap();
     }
 }

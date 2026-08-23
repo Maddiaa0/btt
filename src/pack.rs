@@ -221,6 +221,48 @@ fn validate(manifest: &Manifest) -> Result<()> {
     Ok(())
 }
 
+/// Validate a set of packs that will run together: two packs must not ship
+/// *different* wasm grammar modules under the same export symbol.
+///
+/// This runs once, before any parallel work, so the outcome is
+/// deterministic — a per-thread check would report the collision or not
+/// depending on which worker touched which pack first.
+///
+/// # Errors
+///
+/// Returns [`Error::GrammarSymbolCollision`] naming both packs.
+pub fn validate_set(packs: &[Pack]) -> Result<()> {
+    let mut seen: BTreeMap<&str, &Pack> = BTreeMap::new();
+    for pack in packs {
+        if !matches!(pack.manifest.grammar.source, GrammarSource::Wasm(_)) {
+            continue;
+        }
+        let Some(bytes) = pack.wasm_grammar.as_deref() else {
+            continue; // missing grammar file: surfaces per file at parse time
+        };
+        let symbol = pack
+            .manifest
+            .grammar
+            .symbol
+            .as_deref()
+            .unwrap_or(pack.name());
+        match seen.get(symbol) {
+            Some(first) if first.wasm_grammar.as_deref() != Some(bytes) => {
+                return Err(Error::GrammarSymbolCollision {
+                    symbol: symbol.to_string(),
+                    first: first.name().to_string(),
+                    second: pack.name().to_string(),
+                });
+            }
+            Some(_) => {}
+            None => {
+                seen.insert(symbol, pack);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn read(path: &Path) -> Result<String> {
     std::fs::read_to_string(path).map_err(|source| Error::io(path, source))
 }

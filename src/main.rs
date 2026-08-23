@@ -94,10 +94,14 @@ fn load_packs(root: &Path, cfg: &config::ProjectConfig) -> Result<Vec<pack::Pack
     } else {
         cfg.project.packs.clone()
     };
-    Ok(names
+    let packs: Vec<pack::Pack> = names
         .iter()
         .map(|n| pack::load(n, root))
-        .collect::<btt::Result<_>>()?)
+        .collect::<btt::Result<_>>()?;
+    // Deterministic pre-flight: wasm symbol collisions are caught here,
+    // once, rather than nondeterministically inside parallel workers.
+    pack::validate_set(&packs)?;
+    Ok(packs)
 }
 
 /// The rendered outcome of checking one tree file, assembled off-thread so

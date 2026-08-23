@@ -18,7 +18,7 @@ pub enum Level {
 
 /// Severities for the configurable finding categories.
 #[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct CheckConfig {
     /// Severity of tests/blocks present in the file but absent from the tree.
     pub extra: Level,
@@ -40,7 +40,7 @@ impl Default for CheckConfig {
 
 /// A parsed `btt.toml`.
 #[derive(Debug, Default, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ProjectConfig {
     /// The `[project]` section.
     pub project: ProjectSection,
@@ -50,7 +50,7 @@ pub struct ProjectConfig {
 
 /// The `[project]` section of `btt.toml`.
 #[derive(Debug, Default, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ProjectSection {
     /// Packs this project uses, in routing-priority order.
     pub packs: Vec<String>,

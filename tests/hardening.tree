@@ -1,0 +1,7 @@
+pack hardening
+├── when a pack manifest references paths outside its directory
+│   └── it refuses to load
+├── when a pack name is not a single path component
+│   └── it refuses to load
+└── when a manifest contains unknown fields
+    └── it refuses to load

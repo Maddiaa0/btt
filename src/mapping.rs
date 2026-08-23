@@ -23,6 +23,7 @@ pub enum Case {
 
 /// How one category of spec node maps to an identifier.
 #[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct NameRule {
     /// Prefix to strip from the node text before transforming, e.g. "it ".
     #[serde(default)]
@@ -106,6 +107,7 @@ pub enum RootMapping {
 
 /// A pack's complete node-text-to-identifier configuration.
 #[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct Mapping {
     /// How the root line maps onto the file.
     #[serde(default)]

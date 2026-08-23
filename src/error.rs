@@ -46,9 +46,7 @@ pub enum Error {
     },
 
     /// A pack manifest referenced a path that could escape its directory.
-    #[error(
-        "pack `{pack}`: {field} `{value}` must be a relative path with no `..` components"
-    )]
+    #[error("pack `{pack}`: {field} `{value}` must be a relative path with no `..` components")]
     UnsafePath {
         /// The pack with the unsafe reference.
         pack: String,

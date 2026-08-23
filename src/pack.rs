@@ -24,12 +24,13 @@ use include_dir::{Dir, include_dir};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 static EMBEDDED_PACKS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/packs");
 
 /// Identity section of a pack manifest.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackMeta {
     /// Pack name (matches its directory name).
     pub name: String,
@@ -42,6 +43,7 @@ pub struct PackMeta {
 
 /// How files are routed to this pack.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Detect {
     /// Candidate test-file names for a tree file, tried in order.
     /// `{stem}` is the tree file's stem: `map.tree` -> `map`.
@@ -78,6 +80,7 @@ impl<'de> Deserialize<'de> for GrammarSource {
 
 /// Grammar section of a pack manifest.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GrammarConfig {
     /// Grammar source.
     pub source: GrammarSource,
@@ -89,6 +92,7 @@ pub struct GrammarConfig {
 
 /// Extraction section of a pack manifest.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Extract {
     /// Path (within the pack) of the tree-sitter query file.
     pub query: String,
@@ -101,6 +105,7 @@ pub struct Extract {
 
 /// Scaffold section of a pack manifest.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Scaffold {
     /// Path (within the pack) of the scaffold template.
     pub template: String,
@@ -117,6 +122,7 @@ fn default_indent() -> String {
 
 /// A parsed `pack.toml`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Manifest {
     /// Identity.
     pub pack: PackMeta,
@@ -179,6 +185,42 @@ impl Pack {
     }
 }
 
+/// Reject a pack-controlled path value that could escape the directory it
+/// is joined onto: absolute paths and any `..`/`.`/prefix component. These
+/// values come from `pack.toml`, and packs are only "reviewable data" if
+/// the paths they name stay inside the pack (or, for target/output
+/// patterns, the tree file's directory).
+fn confine(pack: &str, field: &'static str, value: &str) -> Result<()> {
+    let safe = !value.is_empty()
+        && Path::new(value)
+            .components()
+            .all(|c| matches!(c, Component::Normal(_)));
+    if safe {
+        Ok(())
+    } else {
+        Err(Error::UnsafePath {
+            pack: pack.to_string(),
+            field,
+            value: value.to_string(),
+        })
+    }
+}
+
+/// Validate every path-like manifest field before any of them is used.
+fn validate(manifest: &Manifest) -> Result<()> {
+    let pack = &manifest.pack.name;
+    confine(pack, "extract.query", &manifest.extract.query)?;
+    confine(pack, "scaffold.template", &manifest.scaffold.template)?;
+    confine(pack, "scaffold.output", &manifest.scaffold.output)?;
+    if let GrammarSource::Wasm(file) = &manifest.grammar.source {
+        confine(pack, "grammar.source", &file.to_string_lossy())?;
+    }
+    for target in &manifest.detect.targets {
+        confine(pack, "detect.targets", target)?;
+    }
+    Ok(())
+}
+
 fn read(path: &Path) -> Result<String> {
     std::fs::read_to_string(path).map_err(|source| Error::io(path, source))
 }
@@ -190,6 +232,7 @@ fn load_from_dir(dir: &Path, origin: Origin) -> Result<Pack> {
             path: manifest_path,
             source: Box::new(source),
         })?;
+    validate(&manifest)?;
     let query = read(&dir.join(&manifest.extract.query))?;
     let template = read(&dir.join(&manifest.scaffold.template))?;
     let wasm_grammar = match &manifest.grammar.source {
@@ -235,6 +278,7 @@ fn load_embedded(dir: &Dir<'static>) -> Result<Pack> {
         path: PathBuf::from(format!("<builtin:{pack_name}>/pack.toml")),
         source: Box::new(source),
     })?;
+    validate(&manifest)?;
     let query = file(&manifest.extract.query)?.to_string();
     let template = file(&manifest.scaffold.template)?.to_string();
     let wasm_grammar = match &manifest.grammar.source {
@@ -259,6 +303,19 @@ fn load_embedded(dir: &Dir<'static>) -> Result<Pack> {
 /// Returns [`Error::PackNotFound`] if no source provides the pack, or an
 /// error describing the broken file if a pack exists but fails to load.
 pub fn load(name: &str, project_root: &Path) -> Result<Pack> {
+    // The name is joined into filesystem paths below: a single normal
+    // path component only, so `load("../../x")` cannot walk anywhere.
+    let mut components = Path::new(name).components();
+    if !matches!(
+        (components.next(), components.next()),
+        (Some(Component::Normal(_)), None)
+    ) {
+        return Err(Error::UnsafePath {
+            pack: name.to_string(),
+            field: "pack name",
+            value: name.to_string(),
+        });
+    }
     let local = project_root.join(".btt/packs").join(name);
     if local.join("pack.toml").is_file() {
         return load_from_dir(&local, Origin::Project(local.clone()));

@@ -9,8 +9,8 @@
 //!
 //! Resolution order for a pack named `foo`:
 //!   1. `<project>/.btt/packs/foo/`        (vendored / project-local)
-//!   2. `$XDG_CONFIG_HOME/btt/packs/foo/`  (user-global, installed via `btt ext`;
-//!      defaults to `~/.config/btt/packs/foo/`)
+//!   2. `$XDG_CONFIG_HOME/btt/packs/foo/`  (user-global; defaults to
+//!      `~/.config/btt/packs/foo/`)
 //!   3. `~/.btt/packs/foo/`                (user-global, legacy location)
 //!   4. packs embedded in the binary       (rust, typescript)
 //!
@@ -540,9 +540,15 @@ pub fn load_builtin(name: &str) -> Result<Pack> {
 pub fn available(project_root: &Path) -> Vec<(String, Origin)> {
     type OriginCtor = fn(PathBuf) -> Origin;
     let mut map: BTreeMap<String, Origin> = BTreeMap::new();
-    let mut dirs: Vec<(PathBuf, OriginCtor)> =
-        vec![(project_root.join(".btt/packs"), Origin::Project as OriginCtor)];
-    dirs.extend(user_pack_dirs().into_iter().map(|d| (d, Origin::User as OriginCtor)));
+    let mut dirs: Vec<(PathBuf, OriginCtor)> = vec![(
+        project_root.join(".btt/packs"),
+        Origin::Project as OriginCtor,
+    )];
+    dirs.extend(
+        user_pack_dirs()
+            .into_iter()
+            .map(|d| (d, Origin::User as OriginCtor)),
+    );
     for (dir, make_origin) in dirs {
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
@@ -680,7 +686,10 @@ mod tests {
                 user_pack_dirs_from(Some(PathBuf::from("/xdg")), Some(PathBuf::from("/home/me")));
             assert_eq!(
                 dirs,
-                vec![PathBuf::from("/xdg/btt/packs"), PathBuf::from("/home/me/.btt/packs")]
+                vec![
+                    PathBuf::from("/xdg/btt/packs"),
+                    PathBuf::from("/home/me/.btt/packs")
+                ]
             );
         }
 

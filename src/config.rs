@@ -123,7 +123,10 @@ mod tests {
         fn finds_a_config_beside_the_tree_file() {
             let root = scratch("beside");
             touch_config(&root.join("web"));
-            assert_eq!(nearest_config_dir(&root.join("web"), &root), Some(root.join("web")));
+            assert_eq!(
+                nearest_config_dir(&root.join("web"), &root),
+                Some(root.join("web"))
+            );
         }
 
         #[test]

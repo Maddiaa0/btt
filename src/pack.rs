@@ -8,9 +8,11 @@
 //! ```
 //!
 //! Resolution order for a pack named `foo`:
-//!   1. `<project>/.btt/packs/foo/`   (vendored / project-local)
-//!   2. `~/.btt/packs/foo/`           (user-global, installed via `btt ext`)
-//!   3. packs embedded in the binary  (rust, typescript)
+//!   1. `<project>/.btt/packs/foo/`        (vendored / project-local)
+//!   2. `$XDG_CONFIG_HOME/btt/packs/foo/`  (user-global, installed via `btt ext`;
+//!      defaults to `~/.config/btt/packs/foo/`)
+//!   3. `~/.btt/packs/foo/`                (user-global, legacy location)
+//!   4. packs embedded in the binary       (rust, typescript)
 //!
 //! Packs are data-only: a manifest, a tree-sitter query, and templates. They
 //! never contain executable code, so vendoring one is as reviewable as any
@@ -134,6 +136,8 @@ pub struct Manifest {
 pub enum Origin {
     /// Embedded in the btt binary.
     Builtin,
+    /// A user-global pack directory: `$XDG_CONFIG_HOME/btt/packs/<name>`
+    /// (default `~/.config/btt/packs/<name>`) or the legacy
     /// `~/.btt/packs/<name>`.
     User(PathBuf),
     /// `<project>/.btt/packs/<name>`.
@@ -245,10 +249,11 @@ pub fn load(name: &str, project_root: &Path) -> Result<Pack> {
     if local.join("pack.toml").is_file() {
         return load_from_dir(&local, Origin::Project(local.clone()));
     }
-    if let Some(global) = home_dir().map(|h| h.join(".btt/packs").join(name))
-        && global.join("pack.toml").is_file()
-    {
-        return load_from_dir(&global, Origin::User(global.clone()));
+    for user_dir in user_pack_dirs() {
+        let global = user_dir.join(name);
+        if global.join("pack.toml").is_file() {
+            return load_from_dir(&global, Origin::User(global.clone()));
+        }
     }
     if let Some(dir) = EMBEDDED_PACKS.get_dir(name) {
         return load_embedded(dir);
@@ -262,12 +267,10 @@ pub fn load(name: &str, project_root: &Path) -> Result<Pack> {
 pub fn available(project_root: &Path) -> Vec<(String, Origin)> {
     type OriginCtor = fn(PathBuf) -> Origin;
     let mut map: BTreeMap<String, Origin> = BTreeMap::new();
-    let dirs: [(Option<PathBuf>, OriginCtor); 2] = [
-        (Some(project_root.join(".btt/packs")), Origin::Project),
-        (home_dir().map(|h| h.join(".btt/packs")), Origin::User),
-    ];
+    let mut dirs: Vec<(PathBuf, OriginCtor)> =
+        vec![(project_root.join(".btt/packs"), Origin::Project as OriginCtor)];
+    dirs.extend(user_pack_dirs().into_iter().map(|d| (d, Origin::User as OriginCtor)));
     for (dir, make_origin) in dirs {
-        let Some(dir) = dir else { continue };
         let Ok(entries) = std::fs::read_dir(&dir) else { continue };
         for entry in entries.flatten() {
             let path = entry.path();
@@ -293,8 +296,31 @@ pub fn builtin_names() -> Vec<String> {
         .collect()
 }
 
-fn home_dir() -> Option<PathBuf> {
-    std::env::home_dir()
+/// User-global pack directories, in priority order.
+fn user_pack_dirs() -> Vec<PathBuf> {
+    user_pack_dirs_from(
+        std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
+        std::env::home_dir(),
+    )
+}
+
+/// Pure resolution of the user-global pack directories:
+///   1. `$XDG_CONFIG_HOME/btt/packs`, defaulting to `~/.config/btt/packs`
+///      when `XDG_CONFIG_HOME` is unset or (per the XDG Base Directory
+///      spec) not an absolute path.
+///   2. `~/.btt/packs` — the pre-XDG location, kept for existing installs.
+fn user_pack_dirs_from(xdg_config_home: Option<PathBuf>, home: Option<PathBuf>) -> Vec<PathBuf> {
+    let config = xdg_config_home
+        .filter(|p| p.is_absolute())
+        .or_else(|| home.as_deref().map(|h| h.join(".config")));
+    let mut dirs = Vec::new();
+    if let Some(config) = config {
+        dirs.push(config.join("btt/packs"));
+    }
+    if let Some(home) = home {
+        dirs.push(home.join(".btt/packs"));
+    }
+    dirs
 }
 
 /// A pack's grammar, resolved for a specific target file.
@@ -342,5 +368,55 @@ pub fn grammar_for<'a>(pack: &'a Pack, target: &Path) -> Result<Grammar<'a>> {
                 name: other.to_string(),
             }),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod when_resolving_user_pack_dirs {
+        use super::*;
+
+        #[test]
+        fn prefers_xdg_config_home_then_legacy() {
+            let dirs =
+                user_pack_dirs_from(Some(PathBuf::from("/xdg")), Some(PathBuf::from("/home/me")));
+            assert_eq!(
+                dirs,
+                vec![PathBuf::from("/xdg/btt/packs"), PathBuf::from("/home/me/.btt/packs")]
+            );
+        }
+
+        #[test]
+        fn defaults_to_dot_config_when_xdg_is_unset() {
+            let dirs = user_pack_dirs_from(None, Some(PathBuf::from("/home/me")));
+            assert_eq!(
+                dirs,
+                vec![
+                    PathBuf::from("/home/me/.config/btt/packs"),
+                    PathBuf::from("/home/me/.btt/packs")
+                ]
+            );
+        }
+
+        #[test]
+        fn ignores_a_relative_xdg_config_home() {
+            let dirs =
+                user_pack_dirs_from(Some(PathBuf::from("rel")), Some(PathBuf::from("/home/me")));
+            assert_eq!(
+                dirs,
+                vec![
+                    PathBuf::from("/home/me/.config/btt/packs"),
+                    PathBuf::from("/home/me/.btt/packs")
+                ]
+            );
+        }
+
+        #[test]
+        fn uses_only_xdg_when_home_is_unknown() {
+            let dirs = user_pack_dirs_from(Some(PathBuf::from("/xdg")), None);
+            assert_eq!(dirs, vec![PathBuf::from("/xdg/btt/packs")]);
+        }
     }
 }

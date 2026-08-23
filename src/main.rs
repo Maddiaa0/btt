@@ -131,6 +131,27 @@ fn cmd_check(
         return Ok(ExitCode::SUCCESS);
     }
 
+    // Config is read only from the invocation root; surface any nested
+    // btt.toml that governs a subtree but is not being applied.
+    let mut nested_configs = std::collections::BTreeSet::new();
+    for tree_path in &tree_files {
+        let dir = tree_path.parent().unwrap_or(Path::new("."));
+        let dir = std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
+        if let Some(cfg_dir) = config::nearest_config_dir(&dir, root)
+            && cfg_dir != root
+        {
+            nested_configs.insert(cfg_dir);
+        }
+    }
+    for dir in &nested_configs {
+        println!(
+            "note: ignoring nested config {} (config is read only from {}); run btt from {} to apply it",
+            dir.join("btt.toml").display(),
+            root.join("btt.toml").display(),
+            dir.display()
+        );
+    }
+
     let (mut errors, mut warnings) = (0usize, 0usize);
     for outcome in &outcomes {
         let report = render(outcome, root);
@@ -306,7 +327,8 @@ const DEFAULT_CONFIG: &str = r#"# btt — branch tree testing (https://github.co
 
 [project]
 # Packs this project uses, in routing-priority order.
-# Project-local packs in .btt/packs/ override user (~/.btt/packs) and builtin ones.
+# Project-local packs in .btt/packs/ override user ($XDG_CONFIG_HOME/btt/packs,
+# then legacy ~/.btt/packs) and builtin ones.
 packs = ["rust"]
 
 [check]

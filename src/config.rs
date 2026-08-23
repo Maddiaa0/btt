@@ -63,6 +63,19 @@ pub fn find_project_root(start: &Path) -> PathBuf {
         .to_path_buf()
 }
 
+/// Find the nearest directory at or above `dir` — without escaping `root` —
+/// that contains a `btt.toml`.
+///
+/// `dir` must share `root`'s form (both absolute, typically) for the
+/// containment check to work.
+#[must_use]
+pub fn nearest_config_dir(dir: &Path, root: &Path) -> Option<PathBuf> {
+    dir.ancestors()
+        .take_while(|d| d.starts_with(root))
+        .find(|d| d.join("btt.toml").is_file())
+        .map(Path::to_path_buf)
+}
+
 /// Load `btt.toml` from the project root, or defaults if absent.
 ///
 /// # Errors
@@ -75,4 +88,62 @@ pub fn load(project_root: &Path) -> Result<ProjectConfig> {
     }
     let raw = std::fs::read_to_string(&path).map_err(|source| Error::io(&path, source))?;
     toml::from_str(&raw).map_err(|source| Error::Toml { path, source: Box::new(source) })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fresh scratch directory unique to this test.
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join(format!("btt-config-tests-{}", std::process::id()))
+            .join(name);
+        _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn touch_config(dir: &Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("btt.toml"), "").unwrap();
+    }
+
+    mod when_finding_the_nearest_config {
+        use super::*;
+
+        #[test]
+        fn finds_a_config_beside_the_tree_file() {
+            let root = scratch("beside");
+            touch_config(&root.join("web"));
+            assert_eq!(nearest_config_dir(&root.join("web"), &root), Some(root.join("web")));
+        }
+
+        #[test]
+        fn walks_up_to_an_ancestor_within_the_root() {
+            let root = scratch("ancestor");
+            touch_config(&root.join("web"));
+            std::fs::create_dir_all(root.join("web/src/deep")).unwrap();
+            assert_eq!(
+                nearest_config_dir(&root.join("web/src/deep"), &root),
+                Some(root.join("web"))
+            );
+        }
+
+        #[test]
+        fn stops_at_the_invocation_root() {
+            let base = scratch("stops");
+            touch_config(&base);
+            let root = base.join("repo");
+            std::fs::create_dir_all(root.join("src")).unwrap();
+            assert_eq!(nearest_config_dir(&root.join("src"), &root), None);
+        }
+
+        #[test]
+        fn returns_none_without_any_config() {
+            let root = scratch("none");
+            std::fs::create_dir_all(root.join("src")).unwrap();
+            assert_eq!(nearest_config_dir(&root.join("src"), &root), None);
+        }
+    }
 }

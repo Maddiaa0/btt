@@ -1,0 +1,6 @@
+pack loading
+└── when resolving user pack dirs
+    ├── it prefers xdg config home then legacy
+    ├── it defaults to dot config when xdg is unset
+    ├── it ignores a relative xdg config home
+    └── it uses only xdg when home is unknown

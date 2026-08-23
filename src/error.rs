@@ -27,7 +27,7 @@ pub enum Error {
     },
 
     /// No pack with the requested name exists in any source.
-    #[error("pack `{name}` not found (searched .btt/packs, ~/.btt/packs, and builtins: {})", builtins.join(", "))]
+    #[error("pack `{name}` not found (searched .btt/packs, $XDG_CONFIG_HOME/btt/packs, ~/.btt/packs, and builtins: {})", builtins.join(", "))]
     PackNotFound {
         /// The requested pack name.
         name: String,

@@ -97,7 +97,7 @@ pub struct SpecNode {
 /// One tree from a `.tree` file.
 #[derive(Debug, Clone)]
 pub struct SpecTree {
-    /// Root line text, e.g. "HashMap".
+    /// Root line text, e.g. `HashMap`.
     pub root: String,
     /// 1-based line number of the root line.
     pub line: usize,
@@ -143,8 +143,9 @@ pub fn parse(source: &str) -> Result<Vec<SpecTree>, ParseError> {
 
         // Pop the stack down to this node's parent depth.
         while stack.last().is_some_and(|(d, _)| *d >= depth) {
-            let (_, done) = stack.pop().expect("checked non-empty");
-            attach(&mut trees, &mut stack, done);
+            if let Some((_, done)) = stack.pop() {
+                attach(&mut trees, &mut stack, done);
+            }
         }
         match stack.last() {
             Some((d, parent)) => {

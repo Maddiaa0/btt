@@ -70,7 +70,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Scaffold { tree, pack, output, force, stdout } => {
             cmd_scaffold(&tree, pack, output, force, stdout, &root, &cfg)
         }
-        Command::Packs => cmd_packs(&root),
+        Command::Packs => Ok(cmd_packs(&root)),
         Command::Init { skill } => cmd_init(&root, skill),
     }
 }
@@ -161,21 +161,17 @@ fn cmd_scaffold(
     root: &Path,
     cfg: &config::ProjectConfig,
 ) -> Result<ExitCode> {
-    let pack = match pack_name {
-        Some(name) => pack::load(&name, root)?,
-        None => {
-            let mut packs = cfg.project.packs.clone();
-            if packs.is_empty() {
-                packs = pack::available(root).into_iter().map(|(name, _)| name).collect();
-            }
-            match packs.as_slice() {
-                [only] => pack::load(only, root)?,
-                _ => bail!(
-                    "multiple packs available ({}); pick one with --pack",
-                    packs.join(", ")
-                ),
-            }
+    let pack = if let Some(name) = pack_name {
+        pack::load(&name, root)?
+    } else {
+        let mut packs = cfg.project.packs.clone();
+        if packs.is_empty() {
+            packs = pack::available(root).into_iter().map(|(name, _)| name).collect();
         }
+        let [only] = packs.as_slice() else {
+            bail!("multiple packs available ({}); pick one with --pack", packs.join(", "));
+        };
+        pack::load(only, root)?
     };
 
     let spec_src = std::fs::read_to_string(tree_path)
@@ -213,7 +209,7 @@ fn cmd_scaffold(
     Ok(ExitCode::SUCCESS)
 }
 
-fn cmd_packs(root: &Path) -> Result<ExitCode> {
+fn cmd_packs(root: &Path) -> ExitCode {
     for (name, origin) in pack::available(root) {
         match pack::load(&name, root) {
             Ok(p) => println!(
@@ -223,7 +219,7 @@ fn cmd_packs(root: &Path) -> Result<ExitCode> {
             Err(e) => println!("{name}  [{origin}]  (broken: {e})"),
         }
     }
-    Ok(ExitCode::SUCCESS)
+    ExitCode::SUCCESS
 }
 
 const DEFAULT_CONFIG: &str = r#"# btt — branch tree testing (https://github.com/Maddiaa0/btt)

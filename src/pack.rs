@@ -187,7 +187,7 @@ fn load_from_dir(dir: &Path, origin: Origin) -> Result<Pack> {
     Ok(Pack { manifest, query, template, origin })
 }
 
-fn load_embedded(dir: &Dir<'_>) -> Result<Pack> {
+fn load_embedded(dir: &Dir<'static>) -> Result<Pack> {
     let pack_name = dir
         .path()
         .file_name()
@@ -233,8 +233,9 @@ pub fn load(name: &str, project_root: &Path) -> Result<Pack> {
 /// sorted by name.
 #[must_use]
 pub fn available(project_root: &Path) -> Vec<(String, Origin)> {
+    type OriginCtor = fn(PathBuf) -> Origin;
     let mut map: BTreeMap<String, Origin> = BTreeMap::new();
-    let dirs: [(Option<PathBuf>, fn(PathBuf) -> Origin); 2] = [
+    let dirs: [(Option<PathBuf>, OriginCtor); 2] = [
         (Some(project_root.join(".btt/packs")), Origin::Project),
         (home_dir().map(|h| h.join(".btt/packs")), Origin::User),
     ];

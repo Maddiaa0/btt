@@ -29,7 +29,7 @@ mod when_checking_btt_against_its_own_trees {
                     }
                 }
                 Target::NotFound { .. } => {
-                    problems.push(format!("{}: no matching test file", tree_path.display()))
+                    problems.push(format!("{}: no matching test file", tree_path.display()));
                 }
             }
         }

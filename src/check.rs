@@ -62,7 +62,7 @@ pub fn unwrap_wrappers(nodes: Vec<ActualNode>, wrappers: &[String]) -> Vec<Actua
     let mut out = Vec::new();
     for mut n in nodes {
         n.children = unwrap_wrappers(std::mem::take(&mut n.children), wrappers);
-        if n.kind == ActualKind::Block && wrappers.iter().any(|w| *w == n.name) {
+        if n.kind == ActualKind::Block && wrappers.contains(&n.name) {
             out.extend(n.children);
         } else {
             out.push(n);
@@ -73,13 +73,12 @@ pub fn unwrap_wrappers(nodes: Vec<ActualNode>, wrappers: &[String]) -> Vec<Actua
 
 /// One discrepancy between a spec tree and a test file.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum Finding {
     /// The spec describes this node but the file does not contain it.
     Missing {
         /// Block or test.
         kind: ActualKind,
-        /// Human path to the node, e.g. "when_the_key_is_absent > returns_none".
+        /// Human path to the node, e.g. `when_the_key_is_absent > returns_none`.
         path: String,
         /// 1-based line in the `.tree` file.
         spec_line: usize,

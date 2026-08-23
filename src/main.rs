@@ -247,7 +247,8 @@ const DEFAULT_CONFIG: &str = r#"# btt — branch tree testing (https://github.co
 
 [project]
 # Packs this project uses, in routing-priority order.
-# Project-local packs in .btt/packs/ override user (~/.btt/packs) and builtin ones.
+# Project-local packs in .btt/packs/ override user ($XDG_CONFIG_HOME/btt/packs,
+# then legacy ~/.btt/packs) and builtin ones.
 packs = ["rust"]
 
 [check]

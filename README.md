@@ -74,9 +74,10 @@ test conventions:
 ### Pack resolution (the nvm-ish part)
 
 ```text
-<repo>/.btt/packs/<name>/    # project-local / vendored — highest priority
-~/.btt/packs/<name>/         # user-global
-(embedded in the binary)     # rust, typescript
+<repo>/.btt/packs/<name>/            # project-local / vendored — highest priority
+$XDG_CONFIG_HOME/btt/packs/<name>/   # user-global (default ~/.config/btt/packs)
+~/.btt/packs/<name>/                 # user-global, legacy location
+(embedded in the binary)             # rust, typescript
 ```
 
 Adding a language never means rebuilding the binary: drop a pack folder in

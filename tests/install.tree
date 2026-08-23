@@ -28,6 +28,16 @@ pack install pipeline
 │   ├── it refuses a name with path separators
 │   ├── it refuses a symlinked entry
 │   └── it refuses a missing pack
-└── when generating the curated index
-    ├── it skips packs whose closure is not fully tracked
-    └── it matches the committed index
+├── when generating the curated index
+│   ├── it skips packs whose closure is not fully tracked
+│   └── it matches the committed index
+├── when staging a wasm pack
+│   └── it stages a grammar blob larger than the text cap
+├── when staging a lexical pack
+│   └── it stages only the manifest and template
+├── when an intermediate directory is a symlink
+│   └── it refuses the install
+├── when a forced swap fails midway
+│   └── it keeps the original pack
+└── when a receipt is present during curated verification
+    └── it still verifies

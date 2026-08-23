@@ -21,10 +21,15 @@ fn fixture_root(case: &str) -> PathBuf {
 }
 
 const MANIFEST: &str = r#"
+format = 1
+
 [pack]
 name = "fixture"
 version = "0.0.1"
 description = "test fixture pack"
+
+[compat]
+btt = ">=0.2.0"
 
 [detect]
 targets = ["{stem}.rs"]
@@ -71,6 +76,36 @@ fn files_under(dir: &Path) -> Vec<String> {
         .collect();
     files.sort();
     files
+}
+
+/// A wasm pack fixture: a grammar-backed manifest plus a dummy blob of
+/// `blob_len` bytes (never parsed by the loader without `--features wasm`).
+fn write_wasm_pack(dir: &Path, blob_len: usize) {
+    std::fs::create_dir_all(dir.join("queries")).unwrap();
+    std::fs::create_dir_all(dir.join("templates")).unwrap();
+    std::fs::write(dir.join("queries/tests.scm"), "; query\n").unwrap();
+    std::fs::write(dir.join("templates/test.jinja"), "// template\n").unwrap();
+    std::fs::write(dir.join("grammar.wasm"), vec![0u8; blob_len]).unwrap();
+    std::fs::write(
+        dir.join("pack.toml"),
+        "format = 1\n\n\
+         [pack]\nname = \"wasmpack\"\nversion = \"0.0.1\"\n\
+         [compat]\nbtt = \">=0.2.0\"\n\
+         [detect]\ntargets = [\"{stem}.rs\"]\n\
+         [grammar]\nsource = \"wasm:grammar.wasm\"\nsymbol = \"rust\"\n\
+         [extract]\nquery = \"queries/tests.scm\"\n\
+         [scaffold]\ntemplate = \"templates/test.jinja\"\noutput = \"{stem}.rs\"\n",
+    )
+    .unwrap();
+}
+
+/// True when a packs root has no `.staging` residue (dir absent or empty).
+fn staging_is_empty(packs_root: &Path) -> bool {
+    let staging = packs_root.join(".staging");
+    match std::fs::read_dir(&staging) {
+        Err(_) => true,
+        Ok(mut entries) => entries.next().is_none(),
+    }
 }
 
 fn provenance() -> install::Provenance {
@@ -147,7 +182,10 @@ mod when_the_source_contains_a_symlink {
 
         let err = install::stage(&source, &case.join("packs")).unwrap_err();
         assert!(matches!(err, Error::InstallUnsafeFile { .. }), "{err}");
-        assert!(!case.join("packs/.staging").join("fixture").exists());
+        // The aborted install left no staging residue at all — asserting a
+        // specific path can't exist would pass vacuously (staging dirs are
+        // named `fixture.<pid>-<seq>`), so check the whole staging root.
+        assert!(staging_is_empty(&case.join("packs")));
     }
 }
 
@@ -172,12 +210,20 @@ mod when_the_manifest_name_is_not_a_single_path_component {
 
     #[test]
     fn refuses_the_install() {
-        let case = fixture_root("stage-bad-name");
-        let source = case.join("src");
-        write_pack(&source, "a/b");
+        // Traversal, separators, the current-dir name, and the installer's
+        // own reserved dotfiles all fail — the name becomes a directory
+        // joined onto the packs root, so only a plain component is safe.
+        for (i, name) in ["a/b", "../evil", ".", ".staging", ".trash"]
+            .iter()
+            .enumerate()
+        {
+            let case = fixture_root(&format!("stage-bad-name-{i}"));
+            let source = case.join("src");
+            write_pack(&source, name);
 
-        let err = install::stage(&source, &case.join("packs")).unwrap_err();
-        assert!(matches!(err, Error::UnsafePath { .. }), "{err}");
+            let err = install::stage(&source, &case.join("packs")).unwrap_err();
+            assert!(matches!(err, Error::UnsafePath { .. }), "{name}: {err}");
+        }
     }
 }
 
@@ -432,8 +478,18 @@ mod when_removing_an_installed_pack {
 mod when_generating_the_curated_index {
     use super::*;
 
+    /// The generator shells out to `git ls-files`, so it only works inside
+    /// a git checkout. A crates.io tarball (or any `.git`-less tree) can't
+    /// run these — skip rather than fail there.
+    fn in_git_checkout() -> bool {
+        repo_root().join(".git").exists()
+    }
+
     #[test]
     fn skips_packs_whose_closure_is_not_fully_tracked() {
+        if !in_git_checkout() {
+            return;
+        }
         // The wasm packs reference grammar blobs that are fetched from
         // release assets, not tracked by git — they must never be offered
         // through the git-tag install path.
@@ -451,6 +507,9 @@ mod when_generating_the_curated_index {
 
     #[test]
     fn matches_the_committed_index() {
+        if !in_git_checkout() {
+            return;
+        }
         let committed = std::fs::read_to_string(repo_root().join("packs-index.toml")).unwrap();
         let tag = install::curated_index().unwrap().tag;
         let (generated, _) = install::generate_index(repo_root(), &tag).unwrap();
@@ -458,5 +517,125 @@ mod when_generating_the_curated_index {
             generated, committed,
             "packs-index.toml is stale; run scripts/gen-packs-index.sh"
         );
+    }
+}
+
+mod when_staging_a_wasm_pack {
+    use super::*;
+
+    #[test]
+    fn stages_a_grammar_blob_larger_than_the_text_cap() {
+        // A blob between the text cap and the wasm cap must stage: it proves
+        // the closure gives the grammar the wasm cap, not the text cap.
+        let case = fixture_root("stage-wasm");
+        let source = case.join("src");
+        let blob_len = usize::try_from(install::MAX_TEXT_BYTES).unwrap() + 4096;
+        write_wasm_pack(&source, blob_len);
+
+        let staged = install::stage(&source, &case.join("packs")).unwrap();
+        let blob = staged
+            .files
+            .iter()
+            .find(|f| f.rel == "grammar.wasm")
+            .expect("grammar blob staged");
+        assert_eq!(blob.size, blob_len as u64);
+    }
+}
+
+mod when_staging_a_lexical_pack {
+    use super::*;
+
+    #[test]
+    fn stages_only_the_manifest_and_template() {
+        // The real curated packs are lexical (no query file); stage one and
+        // confirm the query-less closure copies exactly two files.
+        let case = fixture_root("stage-lexical");
+        let source = repo_root().join("packs-lexical/rust");
+        let staged = install::stage(&source, &case.join("packs")).unwrap();
+        assert_eq!(
+            files_under(staged.dir()),
+            vec!["pack.toml", "templates/test.jinja"]
+        );
+    }
+}
+
+#[cfg(unix)]
+mod when_an_intermediate_directory_is_a_symlink {
+    use super::*;
+
+    #[test]
+    fn refuses_the_install() {
+        // A symlinked *directory* in the source (here `templates/`) would
+        // evade a final-component-only symlink check; the canonicalize
+        // containment check must still refuse it.
+        let case = fixture_root("stage-dir-symlink");
+        let source = case.join("src");
+        write_pack(&source, "fixture");
+        let outside = case.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("test.jinja"), "leaked").unwrap();
+        std::fs::remove_dir_all(source.join("templates")).unwrap();
+        std::os::unix::fs::symlink(&outside, source.join("templates")).unwrap();
+
+        let err = install::stage(&source, &case.join("packs")).unwrap_err();
+        assert!(matches!(err, Error::InstallUnsafeFile { .. }), "{err}");
+    }
+}
+
+mod when_a_forced_swap_fails_midway {
+    use super::*;
+
+    #[test]
+    fn keeps_the_original_pack() {
+        // Install v1, stage v2, then delete the staging dir behind commit's
+        // back so the swap-in rename fails after the old pack was moved to
+        // trash. The rollback must restore v1 intact.
+        let case = fixture_root("force-swap-fail");
+        let source = case.join("src");
+        write_pack(&source, "fixture");
+        let packs = case.join("packs");
+        install::commit(install::stage(&source, &packs).unwrap(), false).unwrap();
+
+        std::fs::write(source.join("templates/test.jinja"), "// v2\n").unwrap();
+        let staged = install::stage(&source, &packs).unwrap();
+        std::fs::remove_dir_all(staged.dir()).unwrap();
+
+        let err = install::commit(staged, true).unwrap_err();
+        assert!(matches!(err, Error::Io { .. }), "{err}");
+        // v1 survives, byte-for-byte.
+        let template = std::fs::read_to_string(packs.join("fixture/templates/test.jinja")).unwrap();
+        assert_eq!(template, "// template\n");
+        assert!(btt::pack::load_dir(&packs.join("fixture")).is_ok());
+    }
+}
+
+mod when_a_receipt_is_present_during_curated_verification {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn still_verifies() {
+        // write_receipt drops receipt.toml into the staging dir. Curated
+        // verification must key off the copied closure (staged.files), not
+        // the staging dir's contents — otherwise receipt.toml reads as an
+        // "extra" file and every curated install aborts.
+        let case = fixture_root("verify-with-receipt");
+        let source = case.join("src");
+        write_pack(&source, "fixture");
+        let staged = install::stage(&source, &case.join("packs")).unwrap();
+        install::write_receipt(&staged, &provenance()).unwrap();
+
+        let entry = install::IndexEntry {
+            name: staged.name().to_string(),
+            kind: "builtin".to_string(),
+            description: String::new(),
+            dir: "packs-x/fixture".to_string(),
+            files: staged
+                .files
+                .iter()
+                .map(|f| (f.rel.clone(), format!("sha256:{}", f.sha256)))
+                .collect::<BTreeMap<_, _>>(),
+        };
+        install::verify_curated(&staged, &entry).unwrap();
     }
 }

@@ -42,8 +42,10 @@ Shared install flags:
   `~/.config/btt/packs/`). The legacy `~/.btt/packs/` is read-only
   compat; the installer never writes there.
 - `--force` — overwrite an already-installed pack of the same name.
-- `--yes` — skip the interactive confirmation (for scripts/CI). Without
-  it, a non-interactive stdin + a non-curated source fails closed.
+- `--yes` — skip the interactive confirmation (for scripts/CI). An
+  install still modifies the system, so **any** non-interactive run
+  without `--yes` fails closed — curated included; CI installs a curated
+  pack with a name plus `--yes`.
 
 `btt packs` remains as an alias for `btt pack list`.
 
@@ -130,9 +132,9 @@ Then, by source:
 - **`--git` / `--path`:** the text files (manifest, query, template) are
   printed in full — a lexical pack's entire definition fits on one
   screen — followed by "install? [y/N]" (default no). A wasm grammar is
-  never printed; instead: `contains a binary grammar blob (<size>,
-  sha256 <digest>) — btt cannot review this for you; install only from
-  sources you trust`.
+  never printed; its size and sha256 appear in the file table above, and
+  a warning names it: `contains a binary grammar blob (<file>) — btt
+  cannot review this for you; install only from sources you trust`.
 
 ### 7. Receipt
 
@@ -195,8 +197,9 @@ files = { "pack.toml" = "sha256:...", "queries/tests.scm" = "sha256:..." }
   byte-match a regeneration, so a stale index cannot ship.
 - Only packs whose **entire closure is tracked by git** are included —
   the generator skips the rest loudly. The wasm twins in `packs-wasm/`
-  reference grammar blobs that live in release assets, not git, so the
-  index starts empty; it lights up when the lexical packs (PR #12) land.
+  reference grammar blobs that live in release assets, not git, so they
+  are skipped; the index currently ships the two lexical packs
+  (`rust-lexical`, `typescript-lexical`) whose closures are plain text.
 - Tradeoff accepted: new curated packs require a btt release. `--git`
   against the repo covers the gap in the meantime.
 
@@ -206,10 +209,11 @@ already in the binary; `pack list` shows them as `builtin`.
 ## `pack list` / `pack show`
 
 `list`: every visible pack — builtin, user-global (XDG + legacy),
-project-local — with name, version, kind, origin, and short digest of
-`pack.toml`; when run inside a project, an `active` marker for packs
-named in `btt.toml` and a `shadows builtin` / `shadows user` marker when
-resolution order hides another pack of the same name. This extends the
+project-local — with name, version, grammar kind, and origin; when run
+inside a project, an `active` marker for packs named in `btt.toml` and a
+`shadows builtin` / `shadows user` marker when resolution order hides
+another pack of the same name (per-file digests live in `pack show`).
+This extends the
 existing `cmd_packs`.
 
 `show <name>`: resolves like `pack::load` (same order), prints the
@@ -234,15 +238,24 @@ provenance if present) without installing anything.
 ## Security invariants (each becomes a test)
 
 1. Install executes no pack-provided code and parses no archive formats.
+   Git acquisition pins `GIT_ALLOW_PROTOCOL` to `https:ssh:file:git`, so
+   command-executing transports (`ext::`, other remote helpers) are
+   refused regardless of the user's git version or config.
 2. Only the manifest closure is copied; a junk/extra file in the source
    never reaches the packs root.
-3. A symlink anywhere in the source aborts the install (never followed,
-   never copied).
-4. Oversized files abort (per-file caps for text and wasm).
+3. A symlink anywhere in the source aborts the install: a final-component
+   symlink is refused outright, and a symlinked directory in the path is
+   caught by the canonical-path containment check. The copy then reads
+   through the canonical path, so the bytes copied are the bytes checked.
+4. Oversized files abort — per-file caps for text and wasm, enforced by a
+   length-bounded read so a file that grows after the stat is still
+   caught.
 5. Validation runs on the staged copy, after copying — a source mutated
    mid-install cannot bypass it (no TOCTOU).
-6. The installed directory name always equals `manifest.pack.name`, and
-   that name is a single normal path component.
+6. The installed directory name always equals `manifest.pack.name`, which
+   `pack::validate` confines to a single normal path component (no `..`,
+   no separators, no leading dot) at the one point every load passes
+   through — so `commit`'s join onto the packs root can never escape it.
 7. Curated installs verify per-file sha256 against digests embedded in
    the binary; mismatch aborts.
 8. `--git` resolves to a commit hash recorded in the receipt.

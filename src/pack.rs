@@ -371,6 +371,18 @@ pub(crate) fn confine(pack: &str, field: &'static str, value: &str) -> Result<()
 /// nothing grammar-shaped; a grammar pack needs its query).
 pub(crate) fn validate(manifest: &Manifest) -> Result<()> {
     let pack = &manifest.pack.name;
+    // The manifest name becomes the installed directory name (and is joined
+    // onto a packs root by the installer's `commit`). Confine it here, at
+    // the one point every load path passes through, so a name like
+    // `../evil` can never reach a filesystem join — even if it was
+    // substituted after an earlier check.
+    if !is_valid_name(pack) {
+        return Err(Error::UnsafePath {
+            pack: pack.clone(),
+            field: "pack.name",
+            value: pack.clone(),
+        });
+    }
     if manifest.format != PACK_FORMAT_VERSION {
         return Err(Error::UnsupportedPackFormat {
             pack: pack.clone(),
@@ -717,10 +729,16 @@ pub fn available(project_root: &Path) -> Vec<(String, Origin)> {
 }
 
 /// True when `name` is safe to join into a packs directory: exactly one
-/// normal path component (`foo` — not `../foo`, `a/b`, `/abs`, or empty).
-/// Every consumer that joins a pack name onto a root must check this.
+/// normal path component (`foo` — not `../foo`, `a/b`, `/abs`, or empty)
+/// and not a dotfile. Rejecting a leading `.` keeps a pack from colliding
+/// with the installer's own `.staging`/`.trash` scratch dirs (or hiding as
+/// a dotfile). Every consumer that joins a pack name onto a root must
+/// check this.
 #[must_use]
 pub fn is_valid_name(name: &str) -> bool {
+    if name.starts_with('.') {
+        return false;
+    }
     let mut components = Path::new(name).components();
     matches!(
         (components.next(), components.next()),

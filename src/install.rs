@@ -29,6 +29,8 @@ use crate::pack::{self, GrammarSource, Manifest};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -124,6 +126,11 @@ fn closure(manifest: &Manifest) -> Vec<(PathBuf, u64)> {
 /// final component must be a regular file (not a symlink), its resolved
 /// path must stay inside the source directory, and its size must clear
 /// `cap`.
+///
+/// The read goes through the canonical, checked path (not the original
+/// name) and is length-bounded, so neither a final-component swapped to a
+/// symlink after the stat nor a file that grows after the stat can defeat
+/// the checks.
 fn read_source_file(source: &Path, rel: &Path, cap: u64) -> Result<Vec<u8>> {
     let path = source.join(rel);
     let meta = path.symlink_metadata().map_err(|e| Error::io(&path, e))?;
@@ -131,20 +138,41 @@ fn read_source_file(source: &Path, rel: &Path, cap: u64) -> Result<Vec<u8>> {
         return Err(Error::InstallUnsafeFile { path });
     }
     // A symlinked *directory* between source root and file evades the
-    // final-component check; the canonical path closes that route.
+    // final-component check; the canonical path closes that route, and is
+    // also what we then open — so the bytes read are the bytes checked.
     let canon = path.canonicalize().map_err(|e| Error::io(&path, e))?;
     let source_canon = source.canonicalize().map_err(|e| Error::io(source, e))?;
     if !canon.starts_with(&source_canon) {
         return Err(Error::InstallUnsafeFile { path });
     }
-    if meta.len() > cap {
+    let file = File::open(&canon).map_err(|e| Error::io(&canon, e))?;
+    // Re-stat through the open handle: a regular file, within cap.
+    let fmeta = file.metadata().map_err(|e| Error::io(&canon, e))?;
+    if !fmeta.is_file() || fmeta.len() > cap {
+        return if fmeta.is_file() {
+            Err(Error::InstallTooLarge {
+                path,
+                size: fmeta.len(),
+                limit: cap,
+            })
+        } else {
+            Err(Error::InstallUnsafeFile { path })
+        };
+    }
+    // Read at most cap+1 bytes so a race that grows the file past the cap
+    // after the stat is still caught rather than copied wholesale.
+    let mut buf = Vec::new();
+    file.take(cap + 1)
+        .read_to_end(&mut buf)
+        .map_err(|e| Error::io(&canon, e))?;
+    if buf.len() as u64 > cap {
         return Err(Error::InstallTooLarge {
             path,
-            size: meta.len(),
+            size: buf.len() as u64,
             limit: cap,
         });
     }
-    std::fs::read(&path).map_err(|e| Error::io(&path, e))
+    Ok(buf)
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -201,13 +229,17 @@ pub fn stage(source: &Path, packs_root: &Path) -> Result<Staged> {
 
     let staging_root = packs_root.join(".staging");
     std::fs::create_dir_all(&staging_root).map_err(|e| Error::io(&staging_root, e))?;
-    // Sweep leftovers of interrupted installs of this same pack.
+    // Sweep leftovers of interrupted installs of this same pack. Match the
+    // exact `<name>.<pid>-<seq>` grammar, not a bare `<name>.` prefix: a
+    // prefix match would also delete the live staging dir of a concurrent
+    // install of a different, dot-containing pack (`foo` vs `foo.bar`).
     if let Ok(entries) = std::fs::read_dir(&staging_root) {
         for entry in entries.flatten() {
-            if entry
-                .file_name()
+            let file_name = entry.file_name();
+            if let Some(suffix) = file_name
                 .to_string_lossy()
-                .starts_with(&format!("{name}."))
+                .strip_prefix(&format!("{name}."))
+                && is_staging_suffix(suffix)
             {
                 let _ = std::fs::remove_dir_all(entry.path());
             }
@@ -247,12 +279,31 @@ pub fn stage(source: &Path, packs_root: &Path) -> Result<Staged> {
     })
 }
 
+/// True when `suffix` is a `<pid>-<seq>` staging tag: two non-empty runs
+/// of ASCII digits joined by a single `-`. Used to sweep only real
+/// staging leftovers, never a differently-named pack's dir.
+fn is_staging_suffix(suffix: &str) -> bool {
+    matches!(
+        suffix.split_once('-'),
+        Some((pid, seq))
+            if !pid.is_empty()
+                && !seq.is_empty()
+                && pid.bytes().all(|b| b.is_ascii_digit())
+                && seq.bytes().all(|b| b.is_ascii_digit())
+    )
+}
+
 struct CleanupGuard(Option<PathBuf>);
 
 impl Drop for CleanupGuard {
     fn drop(&mut self) {
         if let Some(dir) = &self.0 {
             let _ = std::fs::remove_dir_all(dir);
+            // Drop the `.staging` parent too when this was its last entry,
+            // so a failed install leaves no empty scaffolding behind.
+            if let Some(parent) = dir.parent() {
+                let _ = std::fs::remove_dir(parent);
+            }
         }
     }
 }
@@ -496,6 +547,13 @@ impl Drop for Checkout {
 
 fn git(args: &[&str]) -> Result<String> {
     let output = std::process::Command::new("git")
+        // Restrict transports to the safe, non-executing set. Git's `ext::`
+        // (and other remote-helper) transports run arbitrary shell commands
+        // *at clone time* — before any review — and are permitted by default
+        // for command-line URLs on many git versions. Pinning the allowlist
+        // makes "installing never runs pack code" hold regardless of the
+        // user's git version or config. `file` is needed for local tests.
+        .env("GIT_ALLOW_PROTOCOL", "https:ssh:file:git")
         .args(args)
         .output()
         .map_err(|e| Error::Git {
@@ -531,8 +589,16 @@ pub fn fetch_git(url: &str, reference: Option<&str>) -> Result<Checkout> {
         let _ = std::fs::remove_dir_all(&dir);
         return Err(e);
     }
-    let commit = git(&["-C", &dir_str, "rev-parse", "HEAD"])?;
-    Ok(Checkout { dir, commit })
+    match git(&["-C", &dir_str, "rev-parse", "HEAD"]) {
+        Ok(commit) => Ok(Checkout { dir, commit }),
+        Err(e) => {
+            // The clone succeeded but resolving HEAD failed: clean up the
+            // checkout rather than leaking it (no `Checkout` exists yet to
+            // own the cleanup on drop).
+            let _ = std::fs::remove_dir_all(&dir);
+            Err(e)
+        }
+    }
 }
 
 /// One pack offered by the curated index.
@@ -669,10 +735,18 @@ pub fn generate_index(repo_root: &Path, tag: &str) -> Result<(String, Vec<String
             ));
             continue;
         }
-        let files = file_digests(&pack_dir, &manifest)?
-            .into_iter()
-            .map(|f| (f.rel, format!("sha256:{}", f.sha256)))
-            .collect();
+        let files = match file_digests(&pack_dir, &manifest) {
+            Ok(digests) => digests
+                .into_iter()
+                .map(|f| (f.rel, format!("sha256:{}", f.sha256)))
+                .collect(),
+            // A tracked-but-unreadable closure file skips this one pack
+            // (loudly), rather than aborting the whole index generation.
+            Err(e) => {
+                skipped.push(format!("{label}: {e}"));
+                continue;
+            }
+        };
         if let Some(dup) = packs.iter().find(|p| p.name == manifest.pack.name) {
             return Err(Error::DigestMismatch {
                 name: manifest.pack.name.clone(),
@@ -760,9 +834,13 @@ mod tests {
         fn manifest(grammar: &str) -> Manifest {
             toml::from_str(&format!(
                 r#"
+                format = 1
+
                 [pack]
                 name = "fixture"
                 version = "0.0.1"
+                [compat]
+                btt = ">=0.2.0"
                 [detect]
                 targets = ["{{stem}}.rs"]
                 [grammar]
@@ -798,6 +876,64 @@ mod tests {
             let files = closure(&manifest("wasm:grammar.wasm"));
             assert_eq!(files.last().unwrap().0, PathBuf::from("grammar.wasm"));
             assert_eq!(files.last().unwrap().1, MAX_WASM_BYTES);
+        }
+
+        #[test]
+        fn omits_the_query_for_a_lexical_pack() {
+            let manifest: Manifest = toml::from_str(
+                r#"
+                format = 1
+
+                [pack]
+                name = "fixture"
+                version = "0.0.1"
+                [compat]
+                btt = ">=0.2.0"
+                [detect]
+                targets = ["{stem}.rs"]
+                [grammar]
+                source = "lexical"
+                [extract]
+                [scaffold]
+                template = "templates/test.jinja"
+                output = "{stem}.rs"
+                [lexical]
+                nest = [["(", ")"]]
+                [lexical.block]
+                open = "x"
+                [lexical.test]
+                open = "y"
+                "#,
+            )
+            .unwrap();
+            let files: Vec<PathBuf> = closure(&manifest).into_iter().map(|(rel, _)| rel).collect();
+            assert_eq!(
+                files,
+                vec![
+                    PathBuf::from("pack.toml"),
+                    PathBuf::from("templates/test.jinja"),
+                ]
+            );
+        }
+    }
+
+    mod when_recognising_staging_suffixes {
+        use super::*;
+
+        #[test]
+        fn accepts_a_pid_seq_tag() {
+            assert!(is_staging_suffix("12345-0"));
+            assert!(is_staging_suffix("1-999"));
+        }
+
+        #[test]
+        fn rejects_a_dotted_pack_name_tail() {
+            // `bar.7-1` is the tail of a concurrent `foo.bar` staging dir
+            // seen through the `foo.` prefix — must not be swept.
+            assert!(!is_staging_suffix("bar.7-1"));
+            assert!(!is_staging_suffix("7"));
+            assert!(!is_staging_suffix("-1"));
+            assert!(!is_staging_suffix("1-"));
         }
     }
 }

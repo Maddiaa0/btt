@@ -3,6 +3,10 @@ pack installation
 │   ├── it renders the unix epoch
 │   ├── it renders a modern date with time of day
 │   └── it renders a leap day
-└── when computing the manifest closure
-    ├── it lists the manifest query and template
-    └── it includes a wasm grammar file
+├── when computing the manifest closure
+│   ├── it lists the manifest query and template
+│   ├── it includes a wasm grammar file
+│   └── it omits the query for a lexical pack
+└── when recognising staging suffixes
+    ├── it accepts a pid seq tag
+    └── it rejects a dotted pack name tail

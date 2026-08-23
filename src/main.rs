@@ -916,10 +916,14 @@ fn cmd_pack_rm(name: &str, project: bool, yes: bool, root: &Path) -> Result<Exit
     } else {
         pack::user_pack_dirs()
     };
-    let Some(packs_root) = roots
-        .iter()
-        .find(|r| r.join(name).symlink_metadata().is_ok())
-    else {
+    // Pick the first root holding a real removable directory of this name.
+    // Skipping symlinks/non-dirs means a stray symlink in a higher-priority
+    // root can't shadow (and block removal of) a genuine pack lower down.
+    let Some(packs_root) = roots.iter().find(|r| {
+        r.join(name)
+            .symlink_metadata()
+            .is_ok_and(|m| m.file_type().is_dir())
+    }) else {
         if pack::builtin_names().iter().any(|b| b == name) {
             bail!("`{name}` is built into the btt binary and cannot be removed");
         }

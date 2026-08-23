@@ -123,8 +123,9 @@ speaks your language without a rebuild. Packs come in three kinds:
   string syntax, nesting brackets, two regexes for what a block and a test
   look like). The whole definition is plain text on one screen — your agent
   can write and install one in a second for whatever language you're using.
-  It fails closed on anything it can't fully account for; when a language
-  outgrows it, graduate to a WASM pack.
+  It fails closed on malformed profiles and unbalanced modeled syntax, but
+  syntax outside the profile can still cause false matches or misses. When
+  that fidelity matters, graduate to a WASM pack.
 
 Want to add your language? The step-by-step authoring guide —
 [docs/extension-packs.md](docs/extension-packs.md) — walks from an

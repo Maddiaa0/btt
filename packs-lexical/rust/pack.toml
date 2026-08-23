@@ -1,7 +1,8 @@
-# Lexical twin of the builtin rust pack: no grammar — the [lexical]
-# profile is the entire language definition. The #[test] marker lives in
-# the test opener regex (there is no test_requires_marker sibling walk
-# here). Validated by tests/lexical.rs against the native extraction.
+# Lexical approximation of the builtin rust pack: no grammar — the
+# [lexical] profile is the entire supported syntax definition. The #[test]
+# marker lives in the test opener regex (there is no test_requires_marker
+# sibling walk here). Its supported subset is validated by tests/lexical.rs
+# against native extraction.
 #
 # Known limits, honestly: no `'` string rule is possible (lifetimes would
 # mask as strings), so char literals containing quotes, braces, or
@@ -35,14 +36,14 @@ nest = [["(", ")"], ["{", "}"]]
 
 # Blocks: any `mod name {` — the body brace inside the match is the span.
 [lexical.block]
-open = '''(?:^|[^\w])(?<kw>mod)\s+(?<name>\w+)\s*\{'''
+open = '''(?:^|[^\w])(?<kw>mod)\s+(?<name>\w+)\s*(?<span>\{)'''
 
 # Tests: a #[test]-like attribute (#[test], #[tokio::test], #[rstest]),
 # then optional further attributes and doc comments (comments are blanked
 # to whitespace before matching), then the fn. The parameter-list paren
 # is the span.
 [lexical.test]
-open = '''#\[[\w:]*test\]\s*(?:#\[[^\[\]]*\]\s*)*(?:pub\s+)?(?:async\s+)?(?<kw>fn)\s+(?<name>\w+)\s*\('''
+open = '''#\[[\w:]*test\]\s*(?:#\[[^\[\]]*\]\s*)*(?:pub\s+)?(?:async\s+)?(?<kw>fn)\s+(?<name>\w+)\s*(?<span>\()'''
 
 [mapping]
 # The tree root is the file itself; top-level conditions become top-level mods.

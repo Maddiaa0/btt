@@ -149,9 +149,17 @@ uncovered = "error"
 
 `cargo bench` runs the check pipeline over 40 generated tree/test pairs at
 1/4/8 threads (`benches/check.rs`); add `--features wasm` for the
-sandboxed-grammar group (fetch grammars first). Criterion keeps baselines
+sandboxed-grammar groups (fetch grammars first). Criterion keeps baselines
 under `target/criterion` — `cargo bench -- --save-baseline main` before a
 change, `-- --baseline main` after, to see the delta.
+
+Read the two group kinds together: the steady-state groups (`check/...`)
+show warm wasm parsing indistinguishable from native, but they exclude
+grammar compilation; the `-cold` groups build a fresh thread pool per
+iteration and expose the per-thread Cranelift compile wasm pays (~50 ms
+per grammar per thread with a warm engine). A fully cold *process* also
+pays one-time wasmtime engine setup — roughly half a second end-to-end in
+release CLI measurements. Neither number alone is the whole story.
 
 ## Dogfood
 

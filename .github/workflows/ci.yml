@@ -20,14 +20,14 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
       - name: Test
-        run: cargo test
+        run: cargo test --locked
       - name: Clippy (pedantic, no warnings)
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
       - name: BTT self-check
-        run: cargo run -- check
+        run: cargo run --locked -- check
       - name: Fetch pinned wasm grammars
         run: ./scripts/fetch-wasm-grammars.sh
       - name: Test (wasm grammars)
-        run: cargo test --features wasm
+        run: cargo test --locked --features wasm
       - name: Clippy (wasm, no warnings)
-        run: cargo clippy --all-targets --features wasm -- -D warnings
+        run: cargo clippy --locked --all-targets --features wasm -- -D warnings

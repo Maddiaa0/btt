@@ -61,6 +61,9 @@ fn setup_fixtures() -> Vec<PathBuf> {
 
 fn bench_pack(c: &mut Criterion, group_name: &str, pack: pack::Pack, tree_files: &[PathBuf]) {
     let packs = vec![pack];
+
+    // Steady state: the pool (and with it, per-thread grammar caches)
+    // persists across iterations, so wasm grammar compilation is excluded.
     let mut group = c.benchmark_group(group_name);
     group
         .sample_size(20)
@@ -78,6 +81,26 @@ fn bench_pack(c: &mut Criterion, group_name: &str, pack: pack::Pack, tree_files:
         });
     }
     group.finish();
+
+    // Cold start: a fresh pool per iteration kills the thread-local caches
+    // with their threads, so wasm pays its per-thread Cranelift compile
+    // every time — the cost the steady-state group deliberately excludes.
+    let mut cold = c.benchmark_group(format!("{group_name}-cold"));
+    cold.sample_size(10)
+        .warm_up_time(Duration::from_secs(1))
+        .measurement_time(Duration::from_secs(5));
+    for jobs in [1, 4] {
+        cold.bench_with_input(BenchmarkId::new("jobs", jobs), &jobs, |b, &jobs| {
+            b.iter(|| {
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(jobs)
+                    .build()
+                    .unwrap();
+                pool.install(|| runner::check_all(&packs, tree_files, CheckConfig::default()))
+            });
+        });
+    }
+    cold.finish();
 }
 
 fn benches(c: &mut Criterion) {

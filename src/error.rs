@@ -45,6 +45,28 @@ pub enum Error {
         source: Box<toml::de::Error>,
     },
 
+    /// A pack manifest referenced a path that could escape its directory.
+    #[error("pack `{pack}`: {field} `{value}` must be a relative path with no `..` components")]
+    UnsafePath {
+        /// The pack with the unsafe reference.
+        pack: String,
+        /// Which manifest field held it.
+        field: &'static str,
+        /// The offending value.
+        value: String,
+    },
+
+    /// A target pattern that forward and reverse routing would disagree on.
+    #[error(
+        "pack `{pack}`: target pattern `{pattern}` must contain exactly one {{stem}} and no directory separators"
+    )]
+    InvalidTargetPattern {
+        /// The pack with the bad pattern.
+        pack: String,
+        /// The offending pattern.
+        pattern: String,
+    },
+
     /// A file referenced by a pack manifest is missing or not UTF-8.
     #[error("pack `{pack}`: missing or invalid file `{file}`")]
     PackFile {
@@ -65,10 +87,25 @@ pub enum Error {
 
     /// A pack requests a `wasm:` grammar but this binary was built without
     /// the `wasm` feature.
-    #[error("pack `{pack}`: wasm grammars need a btt built with the `wasm` feature (cargo install btt --features wasm)")]
+    #[error(
+        "pack `{pack}`: wasm grammars need a btt built with the `wasm` feature (cargo install btt --features wasm)"
+    )]
     WasmUnsupported {
         /// The pack requesting the grammar.
         pack: String,
+    },
+
+    /// Two packs ship different wasm grammar modules under one symbol.
+    #[error(
+        "packs `{first}` and `{second}` both export `tree_sitter_{symbol}` with different grammars; give one a distinct symbol"
+    )]
+    GrammarSymbolCollision {
+        /// The contested export symbol.
+        symbol: String,
+        /// The pack that claimed the symbol first (load order).
+        first: String,
+        /// The pack that collided with it.
+        second: String,
     },
 
     /// Loading or instantiating a pack's WASM grammar failed.
@@ -131,6 +168,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
     pub(crate) fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
-        Error::Io { path: path.into(), source }
+        Error::Io {
+            path: path.into(),
+            source,
+        }
     }
 }

@@ -131,7 +131,11 @@ pub fn parse(source: &str) -> Result<Vec<SpecTree>, ParseError> {
 
         if depth == 0 {
             flush_tree(&mut trees, &mut stack);
-            trees.push(SpecTree { root: node_text, line, children: Vec::new() });
+            trees.push(SpecTree {
+                root: node_text,
+                line,
+                children: Vec::new(),
+            });
             continue;
         }
 
@@ -139,7 +143,12 @@ pub fn parse(source: &str) -> Result<Vec<SpecTree>, ParseError> {
             return Err(ParseError::BranchBeforeRoot { line });
         }
         let kind = classify(&node_text, line)?;
-        let node = SpecNode { kind, text: node_text, line, children: Vec::new() };
+        let node = SpecNode {
+            kind,
+            text: node_text,
+            line,
+            children: Vec::new(),
+        };
 
         // Pop the stack down to this node's parent depth.
         while stack.last().is_some_and(|(d, _)| *d >= depth) {
@@ -150,15 +159,26 @@ pub fn parse(source: &str) -> Result<Vec<SpecTree>, ParseError> {
         match stack.last() {
             Some((d, parent)) => {
                 if depth != d + 1 {
-                    return Err(ParseError::DepthJump { line, from: *d, to: depth });
+                    return Err(ParseError::DepthJump {
+                        line,
+                        from: *d,
+                        to: depth,
+                    });
                 }
                 if parent.kind == NodeKind::Action {
-                    return Err(ParseError::ActionWithChildren { line, parent_line: parent.line });
+                    return Err(ParseError::ActionWithChildren {
+                        line,
+                        parent_line: parent.line,
+                    });
                 }
             }
             None => {
                 if depth != 1 {
-                    return Err(ParseError::DepthJump { line, from: 0, to: depth });
+                    return Err(ParseError::DepthJump {
+                        line,
+                        from: 0,
+                        to: depth,
+                    });
                 }
             }
         }
@@ -196,7 +216,10 @@ fn classify(text: &str, line: usize) -> Result<NodeKind, ParseError> {
     } else if lower == "it" || lower.starts_with("it ") {
         Ok(NodeKind::Action)
     } else {
-        Err(ParseError::UnknownKeyword { line, text: text.to_string() })
+        Err(ParseError::UnknownKeyword {
+            line,
+            text: text.to_string(),
+        })
     }
 }
 
@@ -219,7 +242,10 @@ fn parse_line(line: &str, lineno: usize) -> Result<(usize, String), ParseError> 
         if depth == 0 {
             return Ok((0, rest.trim().to_string()));
         }
-        return Err(ParseError::MalformedPrefix { line: lineno, text: line.to_string() });
+        return Err(ParseError::MalformedPrefix {
+            line: lineno,
+            text: line.to_string(),
+        });
     }
 }
 
@@ -270,7 +296,10 @@ HashMap
             let present = &root.children[0];
             assert_eq!(present.kind, NodeKind::Condition);
             assert_eq!(present.children.len(), 2);
-            assert_eq!(present.children[1].children[0].text, "it returns the latest value");
+            assert_eq!(
+                present.children[1].children[0].text,
+                "it returns the latest value"
+            );
         }
 
         #[test]
@@ -301,14 +330,20 @@ HashMap
             let src = "A\n└── it works\n    └── it nested\n";
             assert!(matches!(
                 parse(src),
-                Err(ParseError::ActionWithChildren { line: 3, parent_line: 2 })
+                Err(ParseError::ActionWithChildren {
+                    line: 3,
+                    parent_line: 2
+                })
             ));
         }
 
         #[test]
         fn rejects_unknown_node_keywords() {
             let src = "A\n└── sometimes it works\n";
-            assert!(matches!(parse(src), Err(ParseError::UnknownKeyword { line: 2, .. })));
+            assert!(matches!(
+                parse(src),
+                Err(ParseError::UnknownKeyword { line: 2, .. })
+            ));
         }
 
         #[test]

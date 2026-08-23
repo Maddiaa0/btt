@@ -4,7 +4,6 @@ version = "0.1.0"
 description = "Rust tests: nested `mod` blocks for branches, #[test] fns for leaves"
 
 [detect]
-extensions = ["rs"]
 targets = ["{stem}.rs"]
 
 [grammar]

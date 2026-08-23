@@ -3,5 +3,9 @@ uncovered detection
 │   └── it is reported with its test count
 ├── when a tree spec exists next to the file
 │   └── it is not reported
-└── when a source file has no tests
-    └── it is not reported
+├── when a source file has no tests
+│   └── it is not reported
+├── when a tree routes to only one of two candidates
+│   └── it reports the unrouted candidate
+└── when a candidate cannot be scanned
+    └── it is reported as failed

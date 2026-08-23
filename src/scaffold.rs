@@ -63,9 +63,38 @@ pub fn render(pack: &Pack, expected: &[Expected], stem: &str) -> Result<String> 
     let mut events = Vec::new();
     flatten(expected, 0, &pack.manifest.scaffold.indent, &mut events);
 
-    let env = minijinja::Environment::new();
+    let mut env = minijinja::Environment::new();
+    // Escaping filters for interpolating spec text into code. Titles and
+    // descriptions are arbitrary text; without these, a quote in a title
+    // produces a scaffold that does not compile.
+    env.add_filter("js_string", |s: String| {
+        s.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            // U+2028/U+2029 are line terminators in JavaScript; escaped,
+            // they stay string data on every parser.
+            .replace('\u{2028}', "\\u2028")
+            .replace('\u{2029}', "\\u2029")
+    });
+    // JS line comments end at *any* line terminator: spec text quoted in a
+    // comment must not be able to end the comment and become code.
+    env.add_filter("line_safe", |s: String| {
+        s.replace(['\r', '\n'], " ")
+            .replace('\u{2028}', "\\u2028")
+            .replace('\u{2029}', "\\u2029")
+    });
+    // Rust string literals that are also format strings (todo!) need brace
+    // doubling on top of quote/backslash escaping.
+    env.add_filter("rust_string", |s: String| {
+        s.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('{', "{{")
+            .replace('}', "}}")
+    });
     let out = env
-        .render_str(&pack.template, minijinja::context! { events => events, stem => stem })
+        .render_str(
+            &pack.template,
+            minijinja::context! { events => events, stem => stem },
+        )
         .map_err(|source| Error::Template {
             pack: pack.name().to_string(),
             source: Box::new(source),

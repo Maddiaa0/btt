@@ -11,8 +11,15 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 /// Find all `.tree` files under the given paths (files pass through as-is).
-#[must_use]
-pub fn find_tree_files(paths: &[PathBuf]) -> Vec<PathBuf> {
+///
+/// Fails closed: a search path that does not exist or a directory that
+/// cannot be read is an error, never an empty result — "no .tree files
+/// found" must not be the report for a mistyped path.
+///
+/// # Errors
+///
+/// Returns the first walk error (missing path, unreadable directory).
+pub fn find_tree_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     for path in paths {
         if path.is_file() {
@@ -24,9 +31,9 @@ pub fn find_tree_files(paths: &[PathBuf]) -> Vec<PathBuf> {
             !(e.file_type().is_dir()
                 && (name == ".git" || name == "target" || name == "node_modules"))
         });
-        for entry in walker.flatten() {
-            if entry.file_type().is_file()
-                && entry.path().extension().is_some_and(|e| e == "tree")
+        for entry in walker {
+            let entry = entry.map_err(|e| walk_error(path, e))?;
+            if entry.file_type().is_file() && entry.path().extension().is_some_and(|e| e == "tree")
             {
                 out.push(entry.into_path());
             }
@@ -34,7 +41,18 @@ pub fn find_tree_files(paths: &[PathBuf]) -> Vec<PathBuf> {
     }
     out.sort();
     out.dedup();
-    out
+    Ok(out)
+}
+
+/// Convert a walk error into a typed I/O error at the most specific path.
+fn walk_error(root: &Path, e: walkdir::Error) -> Error {
+    let path = e
+        .path()
+        .map_or_else(|| root.to_path_buf(), Path::to_path_buf);
+    let source = e
+        .into_io_error()
+        .unwrap_or_else(|| std::io::Error::other("filesystem loop"));
+    Error::io(path, source)
 }
 
 /// A test-bearing source file that no `.tree` spec covers.
@@ -64,43 +82,75 @@ fn count_actual_tests(nodes: &[extract::ActualNode]) -> usize {
         .sum()
 }
 
-/// Find source files under `paths` that contain tests but have no `.tree`
-/// spec next to them. This is what keeps partial adoption honest: `check`
+/// Outcome of the uncovered scan: files that need specs, plus files the
+/// scan could not verify.
+#[derive(Debug, Default)]
+pub struct UncoveredScan {
+    /// Test-bearing files no tree routes to, in path order.
+    pub uncovered: Vec<Uncovered>,
+    /// Candidates that could not be scanned (unreadable file or directory,
+    /// grammar unavailable, …). Unverifiable coverage is a tool failure,
+    /// not an absence of findings — strict projects must not pass because
+    /// extraction or the directory walk broke.
+    pub failed: Vec<(PathBuf, Error)>,
+}
+
+/// Find source files under `paths` that contain tests but that no `.tree`
+/// spec routes to. This is what keeps partial adoption honest: `check`
 /// reports not just "the covered files match" but "these files are not
 /// covered at all".
 ///
-/// A file is a candidate when its name matches a pack's target pattern in
-/// reverse (so a tree *could* route to it) and no `<stem>.tree` exists
-/// beside it; it is uncovered when the pack's query extracts at least one
-/// test from it. Files that fail to read or parse are skipped — they could
-/// not be checked either way. Runs on the ambient rayon pool.
+/// Coverage is routing-exact: only the file forward routing actually
+/// selects for a tree (the *first* existing target pattern) counts as
+/// covered — a same-stem sibling matching a later pattern does not. A file
+/// is a candidate when its name matches any pack's target pattern in
+/// reverse; it is uncovered when the pack's query extracts at least one
+/// test from it. Runs on the ambient rayon pool.
 #[must_use]
-pub fn find_uncovered(packs: &[Pack], paths: &[PathBuf]) -> Vec<Uncovered> {
+pub fn find_uncovered(packs: &[Pack], paths: &[PathBuf], tree_files: &[PathBuf]) -> UncoveredScan {
+    let covered: std::collections::HashSet<PathBuf> = tree_files
+        .iter()
+        .filter_map(|tree| match resolve_target(tree, packs) {
+            Target::Found { path, .. } => Some(path),
+            Target::NotFound { .. } => None,
+        })
+        .collect();
+
     let mut candidates: Vec<(PathBuf, &Pack)> = Vec::new();
+    let mut walk_failures: Vec<(PathBuf, Error)> = Vec::new();
     for path in paths {
         let walker = WalkDir::new(path).into_iter().filter_entry(|e| {
             let name = e.file_name().to_string_lossy();
             !(e.file_type().is_dir()
                 && (name == ".git" || name == "target" || name == "node_modules"))
         });
-        for entry in walker.flatten() {
+        for entry in walker {
+            let entry = match entry {
+                Ok(entry) => entry,
+                // A directory that cannot be walked hides an unknown
+                // number of candidates: record it as a failure so strict
+                // projects fail instead of passing blind.
+                Err(e) => {
+                    let at = e.path().map_or_else(|| path.clone(), Path::to_path_buf);
+                    walk_failures.push((at, walk_error(path, e)));
+                    continue;
+                }
+            };
             if !entry.file_type().is_file() {
                 continue;
             }
-            let Some(name) = entry.file_name().to_str() else { continue };
-            let dir = entry.path().parent().unwrap_or(Path::new("."));
-            let mut matched: Option<&Pack> = None;
-            let mut covered = false;
-            for pack in packs {
-                for pattern in &pack.manifest.detect.targets {
-                    if let Some(stem) = stem_for(pattern, name) {
-                        matched.get_or_insert(pack);
-                        covered |= dir.join(format!("{stem}.tree")).is_file();
-                    }
-                }
-            }
+            let Some(name) = entry.file_name().to_str() else {
+                continue;
+            };
+            let matched = packs.iter().find(|pack| {
+                pack.manifest
+                    .detect
+                    .targets
+                    .iter()
+                    .any(|pattern| stem_for(pattern, name).is_some())
+            });
             if let Some(pack) = matched
-                && !covered
+                && !covered.contains(entry.path())
             {
                 candidates.push((entry.into_path(), pack));
             }
@@ -109,15 +159,27 @@ pub fn find_uncovered(packs: &[Pack], paths: &[PathBuf]) -> Vec<Uncovered> {
     candidates.sort_by(|a, b| a.0.cmp(&b.0));
     candidates.dedup_by(|a, b| a.0 == b.0);
 
-    candidates
+    let results: Vec<(PathBuf, Result<usize>)> = candidates
         .par_iter()
-        .filter_map(|(path, pack)| {
-            let source = std::fs::read_to_string(path).ok()?;
-            let actual = extract::extract(pack, path, &source).ok()?;
-            let tests = count_actual_tests(&actual);
-            (tests > 0).then(|| Uncovered { path: path.clone(), tests })
+        .map(|(path, pack)| {
+            let count = std::fs::read_to_string(path)
+                .map_err(|source| Error::io(path, source))
+                .and_then(|source| extract::extract(pack, path, &source))
+                .map(|actual| count_actual_tests(&actual));
+            (path.clone(), count)
         })
-        .collect()
+        .collect();
+
+    let mut scan = UncoveredScan::default();
+    scan.failed.extend(walk_failures);
+    for (path, result) in results {
+        match result {
+            Ok(tests) if tests > 0 => scan.uncovered.push(Uncovered { path, tests }),
+            Ok(_) => {}
+            Err(e) => scan.failed.push((path, e)),
+        }
+    }
+    scan
 }
 
 /// Result of routing a `.tree` file to its test file.
@@ -141,13 +203,19 @@ pub enum Target<'a> {
 #[must_use]
 pub fn resolve_target<'a>(tree_path: &Path, packs: &'a [Pack]) -> Target<'a> {
     let dir = tree_path.parent().unwrap_or(Path::new("."));
-    let stem = tree_path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+    let stem = tree_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
     let mut candidates = Vec::new();
     for pack in packs {
         for pattern in &pack.manifest.detect.targets {
             let candidate = dir.join(pattern.replace("{stem}", stem));
             if candidate.is_file() {
-                return Target::Found { pack, path: candidate };
+                return Target::Found {
+                    pack,
+                    path: candidate,
+                };
             }
             candidates.push(candidate);
         }
@@ -177,12 +245,13 @@ pub fn check_file(
     target: &Path,
     cfg: &CheckConfig,
 ) -> Result<Vec<Reported>> {
-    let spec_src = std::fs::read_to_string(tree_path)
-        .map_err(|source| Error::io(tree_path, source))?;
-    let trees = tree::parse(&spec_src)
-        .map_err(|source| Error::Parse { path: tree_path.to_path_buf(), source })?;
-    let source =
-        std::fs::read_to_string(target).map_err(|source| Error::io(target, source))?;
+    let spec_src =
+        std::fs::read_to_string(tree_path).map_err(|source| Error::io(tree_path, source))?;
+    let trees = tree::parse(&spec_src).map_err(|source| Error::Parse {
+        path: tree_path.to_path_buf(),
+        source,
+    })?;
+    let source = std::fs::read_to_string(target).map_err(|source| Error::io(target, source))?;
 
     let mapping = &pack.manifest.mapping;
     let expected = check::expected_from_spec(&trees, mapping);
@@ -247,14 +316,18 @@ pub fn check_all(packs: &[Pack], tree_files: &[PathBuf], cfg: CheckConfig) -> Ve
         .map(|tree_path| {
             let result = match resolve_target(tree_path, packs) {
                 Target::NotFound { candidates } => FileResult::NoTarget { candidates },
-                Target::Found { pack, path } => {
-                    match check_file(pack, tree_path, &path, &cfg) {
-                        Ok(findings) => FileResult::Checked { target: path, findings },
-                        Err(e) => FileResult::Failed(e),
-                    }
-                }
+                Target::Found { pack, path } => match check_file(pack, tree_path, &path, &cfg) {
+                    Ok(findings) => FileResult::Checked {
+                        target: path,
+                        findings,
+                    },
+                    Err(e) => FileResult::Failed(e),
+                },
             };
-            FileOutcome { tree_path: tree_path.clone(), result }
+            FileOutcome {
+                tree_path: tree_path.clone(),
+                result,
+            }
         })
         .collect()
 }

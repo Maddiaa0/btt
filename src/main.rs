@@ -71,23 +71,56 @@ fn run(cli: Cli) -> Result<ExitCode> {
 
     match cli.command {
         Command::Check { paths, jobs } => cmd_check(&paths, jobs, &root, &cfg),
-        Command::Scaffold { tree, pack, output, force, stdout } => {
-            cmd_scaffold(&tree, pack, output, force, stdout, &root, &cfg)
-        }
+        Command::Scaffold {
+            tree,
+            pack,
+            output,
+            force,
+            stdout,
+        } => cmd_scaffold(&tree, pack, output, force, stdout, &root, &cfg),
         Command::Packs => Ok(cmd_packs(&root)),
         Command::Init { skill } => cmd_init(&root, skill),
     }
 }
 
-/// Load the project's configured packs, or every available pack when the
-/// project doesn't pin any.
+/// Load the project's configured packs; with no `packs = [...]`, only the
+/// builtins embedded in this binary. Project and user packs can carry
+/// executable grammar code and control what is parsed and how — presence
+/// in a directory is never activation, the config must name them.
 fn load_packs(root: &Path, cfg: &config::ProjectConfig) -> Result<Vec<pack::Pack>> {
-    let names: Vec<String> = if cfg.project.packs.is_empty() {
-        pack::available(root).into_iter().map(|(name, _)| name).collect()
+    let packs: Vec<pack::Pack> = if cfg.project.packs.is_empty() {
+        warn_inactive_packs(root);
+        pack::builtin_names()
+            .iter()
+            .map(|n| pack::load_builtin(n))
+            .collect::<btt::Result<_>>()?
     } else {
-        cfg.project.packs.clone()
+        cfg.project
+            .packs
+            .iter()
+            .map(|n| pack::load(n, root))
+            .collect::<btt::Result<_>>()?
     };
-    Ok(names.iter().map(|n| pack::load(n, root)).collect::<btt::Result<_>>()?)
+    // Deterministic pre-flight: wasm symbol collisions are caught here,
+    // once, rather than nondeterministically inside parallel workers.
+    pack::validate_set(&packs)?;
+    Ok(packs)
+}
+
+/// An unconfigured run ignores project/user packs; say so instead of
+/// silently not finding their tests.
+fn warn_inactive_packs(root: &Path) {
+    let inactive: Vec<String> = pack::available(root)
+        .into_iter()
+        .filter(|(_, origin)| *origin != pack::Origin::Builtin)
+        .map(|(name, origin)| format!("{name} [{origin}]"))
+        .collect();
+    if !inactive.is_empty() {
+        eprintln!(
+            "note: ignoring {} — packs are only active when btt.toml names them (packs = [...])",
+            inactive.join(", ")
+        );
+    }
 }
 
 /// The rendered outcome of checking one tree file, assembled off-thread so
@@ -105,18 +138,22 @@ fn cmd_check(
     cfg: &config::ProjectConfig,
 ) -> Result<ExitCode> {
     let packs = load_packs(root, cfg)?;
-    let search = if paths.is_empty() { vec![root.to_path_buf()] } else { paths.to_vec() };
-    let tree_files = runner::find_tree_files(&search);
+    let search = if paths.is_empty() {
+        vec![root.to_path_buf()]
+    } else {
+        paths.to_vec()
+    };
+    let tree_files = runner::find_tree_files(&search)?;
 
     let run = || {
         let outcomes = runner::check_all(&packs, &tree_files, cfg.check);
-        let uncovered = match cfg.check.uncovered {
-            Level::Ignore => Vec::new(),
-            Level::Error | Level::Warn => runner::find_uncovered(&packs, &search),
+        let scan = match cfg.check.uncovered {
+            Level::Ignore => runner::UncoveredScan::default(),
+            Level::Error | Level::Warn => runner::find_uncovered(&packs, &search, &tree_files),
         };
-        (outcomes, uncovered)
+        (outcomes, scan)
     };
-    let (outcomes, uncovered) = match jobs {
+    let (outcomes, scan) = match jobs {
         Some(jobs) => rayon::ThreadPoolBuilder::new()
             .num_threads(jobs.get())
             .build()
@@ -126,7 +163,7 @@ fn cmd_check(
         None => run(),
     };
 
-    if tree_files.is_empty() && uncovered.is_empty() {
+    if tree_files.is_empty() && scan.uncovered.is_empty() && scan.failed.is_empty() {
         println!("no .tree files found");
         return Ok(ExitCode::SUCCESS);
     }
@@ -161,25 +198,17 @@ fn cmd_check(
             println!("{line}");
         }
     }
-    for u in &uncovered {
-        let rel = u.path.strip_prefix(root).unwrap_or(&u.path);
-        let sev = if cfg.check.uncovered == Level::Error {
-            errors += 1;
-            "✗"
-        } else {
-            warnings += 1;
-            "!"
-        };
-        println!("{sev} {} — {} test(s), not covered by any .tree", rel.display(), u.tests);
-    }
-    if !uncovered.is_empty() {
-        println!("    hint: write a .tree next to each file mirroring its tests");
+    let scan_report = render_scan(&scan, cfg.check.uncovered, root);
+    errors += scan_report.errors;
+    warnings += scan_report.warnings;
+    for line in &scan_report.lines {
+        println!("{line}");
     }
     // Only claim an uncovered count when the scan actually ran.
     let uncovered_part = if cfg.check.uncovered == Level::Ignore {
         String::new()
     } else {
-        format!("{} uncovered, ", uncovered.len())
+        format!("{} uncovered, ", scan.uncovered.len())
     };
     println!(
         "\n{} tree file(s), {uncovered_part}{errors} error(s), {warnings} warning(s)",
@@ -187,7 +216,10 @@ fn cmd_check(
     );
     // Spec drift exits 1; a file that could not be checked at all is a tool
     // failure and exits 2, like every other tool error.
-    let failed = outcomes.iter().any(|o| matches!(o.result, runner::FileResult::Failed(_)));
+    let failed = !scan.failed.is_empty()
+        || outcomes
+            .iter()
+            .any(|o| matches!(o.result, runner::FileResult::Failed(_)));
     Ok(if failed {
         ExitCode::from(2)
     } else if errors > 0 {
@@ -197,17 +229,74 @@ fn cmd_check(
     })
 }
 
+/// Render the uncovered scan: files needing specs at their configured
+/// severity, then scan failures. Unverifiable coverage is a tool failure —
+/// strict projects must not go green because extraction broke — so
+/// failures are counted in full and printed capped.
+fn render_scan(scan: &runner::UncoveredScan, level: Level, root: &Path) -> FileReport {
+    let mut report = FileReport {
+        lines: Vec::new(),
+        errors: 0,
+        warnings: 0,
+    };
+    for u in &scan.uncovered {
+        let rel = u.path.strip_prefix(root).unwrap_or(&u.path);
+        let sev = if level == Level::Error {
+            report.errors += 1;
+            "✗"
+        } else {
+            report.warnings += 1;
+            "!"
+        };
+        report.lines.push(format!(
+            "{sev} {} — {} test(s), not covered by any .tree",
+            rel.display(),
+            u.tests
+        ));
+    }
+    if !scan.uncovered.is_empty() {
+        report
+            .lines
+            .push("    hint: write a .tree next to each file mirroring its tests".to_string());
+    }
+    report.errors += scan.failed.len();
+    for (path, e) in scan.failed.iter().take(5) {
+        let rel = path.strip_prefix(root).unwrap_or(path);
+        report
+            .lines
+            .push(format!("✗ {} — coverage scan failed: {e}", rel.display()));
+    }
+    if scan.failed.len() > 5 {
+        report.lines.push(format!(
+            "    …and {} more files could not be scanned",
+            scan.failed.len() - 5
+        ));
+    }
+    report
+}
+
 fn render(outcome: &runner::FileOutcome, root: &Path) -> FileReport {
-    let rel = outcome.tree_path.strip_prefix(root).unwrap_or(&outcome.tree_path);
-    let mut report = FileReport { lines: Vec::new(), errors: 0, warnings: 0 };
+    let rel = outcome
+        .tree_path
+        .strip_prefix(root)
+        .unwrap_or(&outcome.tree_path);
+    let mut report = FileReport {
+        lines: Vec::new(),
+        errors: 0,
+        warnings: 0,
+    };
     match &outcome.result {
         runner::FileResult::NoTarget { candidates } => {
             report.errors += 1;
-            report.lines.push(format!("✗ {} — no matching test file", rel.display()));
+            report
+                .lines
+                .push(format!("✗ {} — no matching test file", rel.display()));
             for c in candidates.iter().take(4) {
                 report.lines.push(format!("    tried {}", c.display()));
             }
-            report.lines.push(format!("    hint: btt scaffold {}", rel.display()));
+            report
+                .lines
+                .push(format!("    hint: btt scaffold {}", rel.display()));
         }
         // A broken file reports and counts as an error, but never aborts
         // the rest of the run.
@@ -218,10 +307,14 @@ fn render(outcome: &runner::FileOutcome, root: &Path) -> FileReport {
         }
         runner::FileResult::Checked { target, findings } if findings.is_empty() => {
             let shown = target.file_name().unwrap_or(target.as_os_str());
-            report.lines.push(format!("✓ {} ({})", rel.display(), shown.to_string_lossy()));
+            report
+                .lines
+                .push(format!("✓ {} ({})", rel.display(), shown.to_string_lossy()));
         }
         runner::FileResult::Checked { target, findings } => {
-            report.lines.push(format!("✗ {} → {}", rel.display(), target.display()));
+            report
+                .lines
+                .push(format!("✗ {} → {}", rel.display(), target.display()));
             for r in findings {
                 let sev = if r.level == Level::Error {
                     report.errors += 1;
@@ -230,7 +323,9 @@ fn render(outcome: &runner::FileOutcome, root: &Path) -> FileReport {
                     report.warnings += 1;
                     "warn "
                 };
-                report.lines.push(format!("    {sev} {}", describe(&r.finding, rel, target)));
+                report
+                    .lines
+                    .push(format!("    {sev} {}", describe(&r.finding, rel, target)));
             }
         }
     }
@@ -243,11 +338,27 @@ fn describe(finding: &Finding, tree_rel: &Path, target: &Path) -> String {
         ActualKind::Test => "test ",
     };
     match finding {
-        Finding::Missing { kind, path, spec_line } => {
-            format!("missing {} `{path}` ({}:{spec_line})", noun(*kind), tree_rel.display())
+        Finding::Missing {
+            kind,
+            path,
+            spec_line,
+        } => {
+            format!(
+                "missing {} `{path}` ({}:{spec_line})",
+                noun(*kind),
+                tree_rel.display()
+            )
         }
-        Finding::Extra { kind, path, target_line } => {
-            format!("extra   {} `{path}` ({}:{target_line})", noun(*kind), target.display())
+        Finding::Extra {
+            kind,
+            path,
+            target_line,
+        } => {
+            format!(
+                "extra   {} `{path}` ({}:{target_line})",
+                noun(*kind),
+                target.display()
+            )
         }
         Finding::OutOfOrder { path } => format!("order differs under `{path}`"),
     }
@@ -264,23 +375,37 @@ fn cmd_scaffold(
 ) -> Result<ExitCode> {
     let pack = if let Some(name) = pack_name {
         pack::load(&name, root)?
+    } else if cfg.project.packs.is_empty() {
+        // Unconfigured: only builtins are candidates, as in `check`.
+        let builtins = pack::builtin_names();
+        let [only] = builtins.as_slice() else {
+            bail!(
+                "multiple packs available ({}); pick one with --pack",
+                builtins.join(", ")
+            );
+        };
+        pack::load_builtin(only)?
     } else {
-        let mut packs = cfg.project.packs.clone();
-        if packs.is_empty() {
-            packs = pack::available(root).into_iter().map(|(name, _)| name).collect();
-        }
-        let [only] = packs.as_slice() else {
-            bail!("multiple packs available ({}); pick one with --pack", packs.join(", "));
+        let [only] = cfg.project.packs.as_slice() else {
+            bail!(
+                "multiple packs configured ({}); pick one with --pack",
+                cfg.project.packs.join(", ")
+            );
         };
         pack::load(only, root)?
     };
 
     let spec_src = std::fs::read_to_string(tree_path)
         .with_context(|| format!("reading {}", tree_path.display()))?;
-    let trees = tree::parse(&spec_src)
-        .map_err(|source| btt::Error::Parse { path: tree_path.to_path_buf(), source })?;
+    let trees = tree::parse(&spec_src).map_err(|source| btt::Error::Parse {
+        path: tree_path.to_path_buf(),
+        source,
+    })?;
     let expected = check::expected_from_spec(&trees, &pack.manifest.mapping);
-    let stem = tree_path.file_stem().and_then(|s| s.to_str()).unwrap_or("test");
+    let stem = tree_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("test");
     let rendered = scaffold::render(&pack, &expected, stem)?;
 
     if to_stdout {
@@ -326,9 +451,10 @@ fn cmd_packs(root: &Path) -> ExitCode {
 const DEFAULT_CONFIG: &str = r#"# btt — branch tree testing (https://github.com/Maddiaa0/btt)
 
 [project]
-# Packs this project uses, in routing-priority order.
-# Project-local packs in .btt/packs/ override user ($XDG_CONFIG_HOME/btt/packs,
-# then legacy ~/.btt/packs) and builtin ones.
+# Packs this project uses, in routing-priority order. Only packs named here
+# are active (with no list, only builtins load). A named pack resolves from
+# .btt/packs/, then user dirs ($XDG_CONFIG_HOME/btt/packs, legacy
+# ~/.btt/packs), then the builtins.
 packs = ["rust"]
 
 [check]
@@ -354,7 +480,10 @@ fn cmd_init(root: &Path, skill: bool) -> Result<ExitCode> {
         std::fs::create_dir_all(&skill_dir)?;
         let skill_path = skill_dir.join("SKILL.md");
         if skill_path.exists() {
-            println!("{} already exists, leaving it untouched", skill_path.display());
+            println!(
+                "{} already exists, leaving it untouched",
+                skill_path.display()
+            );
         } else {
             std::fs::write(&skill_path, include_str!("../assets/SKILL.md"))?;
             println!("wrote {}", skill_path.display());

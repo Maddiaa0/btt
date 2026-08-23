@@ -18,7 +18,7 @@ pub enum Level {
 
 /// Severities for the configurable finding categories.
 #[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct CheckConfig {
     /// Severity of tests/blocks present in the file but absent from the tree.
     pub extra: Level,
@@ -30,13 +30,17 @@ pub struct CheckConfig {
 
 impl Default for CheckConfig {
     fn default() -> Self {
-        CheckConfig { extra: Level::Warn, order: Level::Warn, uncovered: Level::Warn }
+        CheckConfig {
+            extra: Level::Warn,
+            order: Level::Warn,
+            uncovered: Level::Warn,
+        }
     }
 }
 
 /// A parsed `btt.toml`.
 #[derive(Debug, Default, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ProjectConfig {
     /// The `[project]` section.
     pub project: ProjectSection,
@@ -46,7 +50,7 @@ pub struct ProjectConfig {
 
 /// The `[project]` section of `btt.toml`.
 #[derive(Debug, Default, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ProjectSection {
     /// Packs this project uses, in routing-priority order.
     pub packs: Vec<String>,
@@ -87,7 +91,10 @@ pub fn load(project_root: &Path) -> Result<ProjectConfig> {
         return Ok(ProjectConfig::default());
     }
     let raw = std::fs::read_to_string(&path).map_err(|source| Error::io(&path, source))?;
-    toml::from_str(&raw).map_err(|source| Error::Toml { path, source: Box::new(source) })
+    toml::from_str(&raw).map_err(|source| Error::Toml {
+        path,
+        source: Box::new(source),
+    })
 }
 
 #[cfg(test)]
@@ -116,7 +123,10 @@ mod tests {
         fn finds_a_config_beside_the_tree_file() {
             let root = scratch("beside");
             touch_config(&root.join("web"));
-            assert_eq!(nearest_config_dir(&root.join("web"), &root), Some(root.join("web")));
+            assert_eq!(
+                nearest_config_dir(&root.join("web"), &root),
+                Some(root.join("web"))
+            );
         }
 
         #[test]

@@ -26,8 +26,11 @@ pub struct Expected {
 pub fn expected_from_spec(trees: &[SpecTree], mapping: &Mapping) -> Vec<Expected> {
     let mut out = Vec::new();
     for tree in trees {
-        let children: Vec<Expected> =
-            tree.children.iter().map(|n| expected_node(n, mapping)).collect();
+        let children: Vec<Expected> = tree
+            .children
+            .iter()
+            .map(|n| expected_node(n, mapping))
+            .collect();
         match mapping.root {
             RootMapping::Block => out.push(Expected {
                 kind: ActualKind::Block,
@@ -52,7 +55,11 @@ fn expected_node(node: &SpecNode, mapping: &Mapping) -> Expected {
         name: rule.apply(&node.text),
         text: node.text.clone(),
         spec_line: node.line,
-        children: node.children.iter().map(|c| expected_node(c, mapping)).collect(),
+        children: node
+            .children
+            .iter()
+            .map(|c| expected_node(c, mapping))
+            .collect(),
     }
 }
 
@@ -108,7 +115,11 @@ pub fn diff(expected: &[Expected], actual: &[ActualNode]) -> Vec<Finding> {
 }
 
 fn join(path: &str, name: &str) -> String {
-    if path.is_empty() { name.to_string() } else { format!("{path} > {name}") }
+    if path.is_empty() {
+        name.to_string()
+    } else {
+        format!("{path} > {name}")
+    }
 }
 
 fn diff_level(expected: &[Expected], actual: &[ActualNode], path: &str, out: &mut Vec<Finding>) {
@@ -138,7 +149,11 @@ fn diff_level(expected: &[Expected], actual: &[ActualNode], path: &str, out: &mu
 
     if !matched_positions.is_sorted() {
         out.push(Finding::OutOfOrder {
-            path: if path.is_empty() { "(top level)".into() } else { path.to_string() },
+            path: if path.is_empty() {
+                "(top level)".into()
+            } else {
+                path.to_string()
+            },
         });
     }
 
@@ -162,7 +177,10 @@ mod tests {
     fn rust_mapping() -> Mapping {
         Mapping {
             root: RootMapping::File,
-            block: NameRule { case: Case::Snake, ..Default::default() },
+            block: NameRule {
+                case: Case::Snake,
+                ..Default::default()
+            },
             test: NameRule {
                 strip_prefix: Some("it ".into()),
                 case: Case::Snake,
@@ -173,11 +191,21 @@ mod tests {
     }
 
     fn block(name: &str, children: Vec<ActualNode>) -> ActualNode {
-        ActualNode { kind: ActualKind::Block, name: name.into(), line: 1, children }
+        ActualNode {
+            kind: ActualKind::Block,
+            name: name.into(),
+            line: 1,
+            children,
+        }
     }
 
     fn test(name: &str) -> ActualNode {
-        ActualNode { kind: ActualKind::Test, name: name.into(), line: 1, children: vec![] }
+        ActualNode {
+            kind: ActualKind::Test,
+            name: name.into(),
+            line: 1,
+            children: vec![],
+        }
     }
 
     const SPEC: &str = "\
@@ -197,7 +225,10 @@ Adder
             let expected = expected_from_spec(&trees, &rust_mapping());
             let actual = vec![
                 block("when_both_inputs_are_zero", vec![test("returns_zero")]),
-                block("when_one_input_is_negative", vec![test("returns_the_difference")]),
+                block(
+                    "when_one_input_is_negative",
+                    vec![test("returns_the_difference")],
+                ),
             ];
             assert!(diff(&expected, &actual).is_empty());
         }
@@ -211,7 +242,10 @@ Adder
                     "tests",
                     vec![
                         block("when_both_inputs_are_zero", vec![test("returns_zero")]),
-                        block("when_one_input_is_negative", vec![test("returns_the_difference")]),
+                        block(
+                            "when_one_input_is_negative",
+                            vec![test("returns_the_difference")],
+                        ),
                     ],
                 )],
                 &rust_mapping().wrappers,
@@ -229,7 +263,10 @@ Adder
             let expected = expected_from_spec(&trees, &rust_mapping());
             let actual = vec![
                 block("when_both_inputs_are_zero", vec![]),
-                block("when_one_input_is_negative", vec![test("returns_the_difference")]),
+                block(
+                    "when_one_input_is_negative",
+                    vec![test("returns_the_difference")],
+                ),
             ];
             let findings = diff(&expected, &actual);
             assert_eq!(
@@ -255,13 +292,19 @@ Adder
                     "when_both_inputs_are_zero",
                     vec![test("returns_zero"), test("does_not_overflow")],
                 ),
-                block("when_one_input_is_negative", vec![test("returns_the_difference")]),
+                block(
+                    "when_one_input_is_negative",
+                    vec![test("returns_the_difference")],
+                ),
             ];
             let findings = diff(&expected, &actual);
             assert_eq!(findings.len(), 1);
             assert!(matches!(
                 findings[0],
-                Finding::Extra { kind: ActualKind::Test, .. }
+                Finding::Extra {
+                    kind: ActualKind::Test,
+                    ..
+                }
             ));
         }
     }
@@ -274,7 +317,10 @@ Adder
             let trees = tree::parse(SPEC).unwrap();
             let expected = expected_from_spec(&trees, &rust_mapping());
             let actual = vec![
-                block("when_one_input_is_negative", vec![test("returns_the_difference")]),
+                block(
+                    "when_one_input_is_negative",
+                    vec![test("returns_the_difference")],
+                ),
                 block("when_both_inputs_are_zero", vec![test("returns_zero")]),
             ];
             let findings = diff(&expected, &actual);

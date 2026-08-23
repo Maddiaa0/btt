@@ -16,7 +16,7 @@
 //! language-specific logic in the core.
 
 use crate::error::{Error, Result};
-use crate::pack::{self, Pack};
+use crate::pack::{self, NameSyntax, Pack};
 use std::path::Path;
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
 
@@ -86,18 +86,26 @@ pub fn extract(pack: &Pack, target: &Path, source: &str) -> Result<Vec<ActualNod
     })?;
 
     let idx_of = |cap: &str| query.capture_index_for_name(cap);
-    let (Some(block_i), Some(block_name_i), Some(test_i), Some(test_name_i)) =
-        (idx_of("block"), idx_of("block.name"), idx_of("test"), idx_of("test.name"))
-    else {
-        return Err(Error::MissingCaptures { pack: pack.name().to_string() });
+    let (Some(block_i), Some(block_name_i), Some(test_i), Some(test_name_i)) = (
+        idx_of("block"),
+        idx_of("block.name"),
+        idx_of("test"),
+        idx_of("test.name"),
+    ) else {
+        return Err(Error::MissingCaptures {
+            pack: pack.name().to_string(),
+        });
     };
     let marker_i = idx_of("test.marker");
     if pack.manifest.extract.test_requires_marker && marker_i.is_none() {
-        return Err(Error::MissingMarkerCapture { pack: pack.name().to_string() });
+        return Err(Error::MissingMarkerCapture {
+            pack: pack.name().to_string(),
+        });
     }
 
     let mut captures: Vec<Capture> = Vec::new();
     let mut marker_ranges: Vec<(usize, usize)> = Vec::new(); // (start, end) bytes
+    let syntax = pack.manifest.extract.name_syntax;
 
     let mut cursor = QueryCursor::new();
     let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
@@ -106,12 +114,12 @@ pub fn extract(pack: &Pack, target: &Path, source: &str) -> Result<Vec<ActualNod
         if let Some(n) = node_for(block_i)
             && let Some(name) = node_for(block_name_i)
         {
-            captures.push(capture(ActualKind::Block, n, name, source));
+            captures.push(capture(ActualKind::Block, n, name, source, syntax));
         }
         if let Some(n) = node_for(test_i)
             && let Some(name) = node_for(test_name_i)
         {
-            captures.push(capture(ActualKind::Test, n, name, source));
+            captures.push(capture(ActualKind::Test, n, name, source, syntax));
         }
         if let Some(i) = marker_i
             && let Some(n) = node_for(i)
@@ -152,10 +160,16 @@ fn parse_source(
             parser.set_language(&language)?;
             let tree = parser
                 .parse(source, None)
-                .ok_or_else(|| Error::SourceParse { path: target.to_path_buf() })?;
+                .ok_or_else(|| Error::SourceParse {
+                    path: target.to_path_buf(),
+                })?;
             Ok((tree, language))
         }
-        pack::Grammar::Wasm { symbol, bytes } => wasm::parse(pack, symbol, bytes, target, source),
+        pack::Grammar::Wasm {
+            symbol,
+            bytes,
+            hash,
+        } => wasm::parse(pack, symbol, bytes, hash, target, source),
     }
 }
 
@@ -177,11 +191,14 @@ mod wasm {
 
     struct ThreadState {
         parser: Parser,
-        /// Compiled languages by export symbol, plus a fingerprint of the
-        /// module bytes they came from. A store holds one grammar per
-        /// export name, so a second pack reusing a symbol with different
-        /// bytes is a hard error rather than a silent mixup.
-        languages: HashMap<String, (u64, Language)>,
+        /// Compiled languages keyed by (export symbol, module content
+        /// hash) — module *identity*, not name. Library callers validate
+        /// pack sets independently, and nothing stops a later set from
+        /// reusing an earlier set's symbol for a different module; content
+        /// keying makes a cache hit correct for any caller in any order.
+        /// (`pack::validate_set` remains as the CLI's friendly pre-flight
+        /// diagnostic, not what makes this safe.)
+        languages: HashMap<(String, u64), Language>,
     }
 
     thread_local! {
@@ -196,47 +213,46 @@ mod wasm {
         ENGINE.get_or_init(Engine::default)
     }
 
-    fn fingerprint(bytes: &[u8]) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        bytes.hash(&mut h);
-        h.finish()
-    }
-
-    pub fn parse(pack: &Pack, symbol: &str, bytes: &[u8], target: &Path, source: &str) -> Result<(Tree, Language)> {
-        let err = |e: String| Error::WasmGrammar { pack: pack.name().to_string(), message: e };
+    pub fn parse(
+        pack: &Pack,
+        symbol: &str,
+        bytes: &[u8],
+        hash: u64,
+        target: &Path,
+        source: &str,
+    ) -> Result<(Tree, Language)> {
+        let err = |e: String| Error::WasmGrammar {
+            pack: pack.name().to_string(),
+            message: e,
+        };
+        let key = (symbol.to_string(), hash);
         STATE.with_borrow_mut(|state| {
-            let print = fingerprint(bytes);
-            match state.languages.get(symbol) {
-                Some((cached, _)) if *cached != print => {
-                    return Err(err(format!(
-                        "another pack already loaded a different grammar exporting \
-                         `tree_sitter_{symbol}`; give one pack a distinct symbol"
-                    )));
-                }
-                Some(_) => {}
-                None => {
-                    // Loading needs the store back from the parser (or a
-                    // fresh one on this thread's first wasm parse).
-                    let mut store = match state.parser.take_wasm_store() {
-                        Some(store) => store,
-                        None => WasmStore::new(engine()).map_err(|e| err(e.to_string()))?,
-                    };
-                    let loaded = store.load_language(symbol, bytes);
-                    // The store goes back into the parser even when loading
-                    // fails; dropping it here would orphan every language
-                    // already compiled on this thread.
-                    state.parser.set_wasm_store(store).map_err(|e| err(e.to_string()))?;
-                    let language = loaded.map_err(|e| err(e.to_string()))?;
-                    state.languages.insert(symbol.to_string(), (print, language));
-                }
+            if !state.languages.contains_key(&key) {
+                // Loading needs the store back from the parser (or a
+                // fresh one on this thread's first wasm parse).
+                let mut store = match state.parser.take_wasm_store() {
+                    Some(store) => store,
+                    None => WasmStore::new(engine()).map_err(|e| err(e.to_string()))?,
+                };
+                let loaded = store.load_language(symbol, bytes);
+                // The store goes back into the parser even when loading
+                // fails; dropping it here would orphan every language
+                // already compiled on this thread.
+                state
+                    .parser
+                    .set_wasm_store(store)
+                    .map_err(|e| err(e.to_string()))?;
+                let language = loaded.map_err(|e| err(e.to_string()))?;
+                state.languages.insert(key.clone(), language);
             }
-            let language = state.languages[symbol].1.clone();
+            let language = state.languages[&key].clone();
             state.parser.set_language(&language)?;
             let tree = state
                 .parser
                 .parse(source, None)
-                .ok_or_else(|| Error::SourceParse { path: target.to_path_buf() })?;
+                .ok_or_else(|| Error::SourceParse {
+                    path: target.to_path_buf(),
+                })?;
             Ok((tree, language))
         })
     }
@@ -254,10 +270,13 @@ mod wasm {
         pack: &Pack,
         _symbol: &str,
         _bytes: &[u8],
+        _hash: u64,
         _target: &Path,
         _source: &str,
     ) -> Result<(tree_sitter::Tree, tree_sitter::Language)> {
-        Err(Error::WasmUnsupported { pack: pack.name().to_string() })
+        Err(Error::WasmUnsupported {
+            pack: pack.name().to_string(),
+        })
     }
 }
 
@@ -270,19 +289,104 @@ fn build_nodes(captures: &[Capture], i: &mut usize, parent_end: usize) -> Vec<Ac
             ActualKind::Block => build_nodes(captures, i, c.end),
             ActualKind::Test => Vec::new(),
         };
-        out.push(ActualNode { kind: c.kind, name: c.name.clone(), line: c.line, children });
+        out.push(ActualNode {
+            kind: c.kind,
+            name: c.name.clone(),
+            line: c.line,
+            children,
+        });
     }
     out
 }
 
-fn capture(kind: ActualKind, node: Node, name_node: Node, source: &str) -> Capture {
+fn capture(
+    kind: ActualKind,
+    node: Node,
+    name_node: Node,
+    source: &str,
+    syntax: NameSyntax,
+) -> Capture {
+    let raw = &source[name_node.byte_range()];
+    let name = match syntax {
+        NameSyntax::Raw => raw.to_string(),
+        NameSyntax::JsString => decode_js_string(raw),
+    };
     Capture {
         kind,
-        name: source[name_node.byte_range()].to_string(),
+        name,
         line: node.start_position().row + 1,
         start: node.start_byte(),
         end: node.end_byte(),
     }
+}
+
+/// Decode a JS string literal's source text (`"a \"b\""`) to its value.
+/// Titles are compared against `.tree` text and templates escape when
+/// scaffolding, so extraction must see the string's *value* — otherwise a
+/// scaffolded quote round-trips into a spurious mismatch.
+fn decode_js_string(text: &str) -> String {
+    let inner = match text.chars().next() {
+        Some(q @ ('"' | '\'' | '`')) if text.len() >= 2 && text.ends_with(q) => {
+            &text[1..text.len() - 1]
+        }
+        _ => text,
+    };
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some('r') => out.push('\r'),
+            Some('0') => out.push('\0'),
+            Some('b') => out.push('\u{0008}'),
+            Some('f') => out.push('\u{000c}'),
+            Some('v') => out.push('\u{000b}'),
+            Some('x') => push_js_hex(&mut out, &mut chars),
+            Some('u') => push_js_unicode(&mut out, &mut chars),
+            // JS: `\q` is just `q` — this covers \" \' \` \\ too.
+            Some(other) => out.push(other),
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
+/// Decode the `NN` of a `\xNN` escape; malformed escapes stay literal.
+fn push_js_hex(out: &mut String, chars: &mut std::str::Chars) {
+    if let Some(hex) = chars.as_str().get(..2)
+        && let Ok(code) = u8::from_str_radix(hex, 16)
+    {
+        out.push(char::from(code));
+        chars.nth(1);
+    } else {
+        out.push_str("\\x");
+    }
+}
+
+/// Decode a `\u{...}` or `\uNNNN` escape; malformed escapes stay literal.
+fn push_js_unicode(out: &mut String, chars: &mut std::str::Chars) {
+    let rest = chars.as_str();
+    if let Some(body) = rest.strip_prefix('{') {
+        if let Some((hex, _)) = body.split_once('}')
+            && let Some(c) = u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
+        {
+            out.push(c);
+            chars.nth(hex.len() + 1); // consume `{`, the digits, and `}`
+            return;
+        }
+    } else if let Some(hex) = rest.get(..4)
+        && let Some(c) = u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
+    {
+        out.push(c);
+        chars.nth(3);
+        return;
+    }
+    out.push_str("\\u");
 }
 
 /// A test has a marker if, walking backwards through its previous named

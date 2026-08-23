@@ -52,7 +52,8 @@ honest. Two copy-paste files in this repo — they are **not** interchangeable:
 
 ## Architecture
 
-One small static binary; languages are **packs** — pure data, no code:
+One small static binary; languages are **packs** — declarative data, plus
+optionally a sandboxed grammar module:
 
 ```text
 packs/rust/
@@ -81,9 +82,19 @@ $XDG_CONFIG_HOME/btt/packs/<name>/   # user-global (default ~/.config/btt/packs)
 ```
 
 Adding a language never means rebuilding the binary: drop a pack folder in
-`.btt/packs/` and it loads at runtime. Packs contain no executable code
-(manifest + query + templates), so vendoring one is reviewable like any
-config change.
+`.btt/packs/` and name it in `packs = [...]`. Activation is explicit —
+with no configured list only the builtins load, so a pack sitting in a
+directory (a cloned repo's `.btt/packs/`, a stale user dir) is never
+executed just for being visible. Named packs resolve in the order above,
+which makes vendoring an override of a builtin a feature you asked for,
+not a surprise. The trust boundary is explicit:
+
+- **Pack data** (manifest, query, naming rules, templates) is declarative —
+  reviewable like any config change. Manifests are parsed strictly and
+  every path they name is confined to the pack directory.
+- **Grammar wasm** (optional, `wasm` feature) is the one part of a pack
+  that is code. It runs sandboxed (see below), but treat it like a
+  dependency: review it, pin digests, get it from a source you trust.
 
 ### Sandboxed WASM grammars (experimental)
 
@@ -99,12 +110,22 @@ symbol = "rust"                # module exports tree_sitter_<symbol>
 This is the same architecture Zed uses: the tree-sitter runtime stays
 native, while the grammar module — including any external scanner code, the
 only arbitrary code a grammar ships — is instantiated in a wasmtime store
-with no WASI, so it cannot touch the filesystem or network. The
+with no WASI, so it has no ambient filesystem or network access. The
 `packs-wasm/` directory holds wasm twins of the builtin packs (grammars
 fetched by `scripts/fetch-wasm-grammars.sh`, pinned by release tag and
 sha256), and `tests/wasm.rs` proves they extract structure identical to the
 natively compiled grammars. Without the feature, the core stays lean and
 wasm packs fail with a clear error.
+
+**What the sandbox is and isn't.** No-WASI instantiation removes ambient
+authority — a grammar cannot open files or sockets. It is *not* a hardened
+boundary against deliberately hostile modules: tree-sitter's host bridge is
+native code that consumes module-provided tables, and there is currently no
+fuel/epoch limit on grammar execution. Wasm grammars are therefore
+**trusted, provenance-pinned artifacts** — vet them like dependencies, as
+the fetch script's tag + sha256 pinning models. Running genuinely untrusted
+packs would need a resource-limited subprocess; that is future work, not a
+property of today's implementation.
 
 ## Configuration
 
@@ -112,7 +133,7 @@ wasm packs fail with a clear error.
 
 ```toml
 [project]
-packs = ["rust"]        # routing-priority order
+packs = ["rust"]        # routing-priority order; empty/absent = builtins only
 
 [check]
 extra = "warn"          # tests in the file but not the tree: error|warn|ignore
@@ -149,9 +170,17 @@ uncovered = "error"
 
 `cargo bench` runs the check pipeline over 40 generated tree/test pairs at
 1/4/8 threads (`benches/check.rs`); add `--features wasm` for the
-sandboxed-grammar group (fetch grammars first). Criterion keeps baselines
+sandboxed-grammar groups (fetch grammars first). Criterion keeps baselines
 under `target/criterion` — `cargo bench -- --save-baseline main` before a
 change, `-- --baseline main` after, to see the delta.
+
+Read the two group kinds together: the steady-state groups (`check/...`)
+show warm wasm parsing indistinguishable from native, but they exclude
+grammar compilation; the `-cold` groups build a fresh thread pool per
+iteration and expose the per-thread Cranelift compile wasm pays (~50 ms
+per grammar per thread with a warm engine). A fully cold *process* also
+pays one-time wasmtime engine setup — roughly half a second end-to-end in
+release CLI measurements. Neither number alone is the whole story.
 
 ## Dogfood
 

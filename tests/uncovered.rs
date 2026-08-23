@@ -1,5 +1,5 @@
 //! Tests for uncovered-file detection: source files that contain tests but
-//! have no `.tree` spec routing to them. Fixtures are written under
+//! that no `.tree` spec routes to. Fixtures are written under
 //! `target/uncovered-fixtures/<case>/` so each case is isolated.
 
 use btt::{pack, runner};
@@ -16,8 +16,8 @@ fn fixture_dir(case: &str) -> PathBuf {
     dir
 }
 
-fn rust_packs() -> Vec<pack::Pack> {
-    vec![pack::load("rust", repo_root()).unwrap()]
+fn packs(name: &str) -> Vec<pack::Pack> {
+    vec![pack::load(name, repo_root()).unwrap()]
 }
 
 const TESTED_RS: &str = "
@@ -30,6 +30,12 @@ mod tests {
 }
 ";
 
+const TESTED_TS: &str = r#"
+describe("map", () => {
+  it("works", () => {});
+});
+"#;
+
 mod when_a_source_file_has_tests_but_no_tree {
     use super::*;
 
@@ -38,10 +44,11 @@ mod when_a_source_file_has_tests_but_no_tree {
         let dir = fixture_dir("no-tree");
         std::fs::write(dir.join("map.rs"), TESTED_RS).unwrap();
 
-        let found = runner::find_uncovered(&rust_packs(), std::slice::from_ref(&dir));
-        assert_eq!(found.len(), 1, "{found:?}");
-        assert_eq!(found[0].path, dir.join("map.rs"));
-        assert_eq!(found[0].tests, 2);
+        let scan = runner::find_uncovered(&packs("rust"), std::slice::from_ref(&dir), &[]);
+        assert!(scan.failed.is_empty(), "{:?}", scan.failed);
+        assert_eq!(scan.uncovered.len(), 1, "{:?}", scan.uncovered);
+        assert_eq!(scan.uncovered[0].path, dir.join("map.rs"));
+        assert_eq!(scan.uncovered[0].tests, 2);
     }
 }
 
@@ -54,8 +61,10 @@ mod when_a_tree_spec_exists_next_to_the_file {
         std::fs::write(dir.join("map.rs"), TESTED_RS).unwrap();
         std::fs::write(dir.join("map.tree"), "map\n└── it works\n").unwrap();
 
-        let found = runner::find_uncovered(&rust_packs(), &[dir]);
-        assert!(found.is_empty(), "{found:?}");
+        let trees = vec![dir.join("map.tree")];
+        let scan = runner::find_uncovered(&packs("rust"), std::slice::from_ref(&dir), &trees);
+        assert!(scan.uncovered.is_empty(), "{:?}", scan.uncovered);
+        assert!(scan.failed.is_empty(), "{:?}", scan.failed);
     }
 }
 
@@ -67,7 +76,46 @@ mod when_a_source_file_has_no_tests {
         let dir = fixture_dir("no-tests");
         std::fs::write(dir.join("lib.rs"), "pub fn helper() {}\n").unwrap();
 
-        let found = runner::find_uncovered(&rust_packs(), &[dir]);
-        assert!(found.is_empty(), "{found:?}");
+        let scan = runner::find_uncovered(&packs("rust"), std::slice::from_ref(&dir), &[]);
+        assert!(scan.uncovered.is_empty(), "{:?}", scan.uncovered);
+        assert!(scan.failed.is_empty(), "{:?}", scan.failed);
+    }
+}
+
+mod when_a_tree_routes_to_only_one_of_two_candidates {
+    use super::*;
+
+    // Coverage is routing-exact: the tree routes to map.test.ts (first
+    // matching target pattern), so a test-bearing map.spec.ts must still
+    // be reported — a same-stem `.tree` alone is not coverage.
+    #[test]
+    fn reports_the_unrouted_candidate() {
+        let dir = fixture_dir("two-candidates");
+        std::fs::write(dir.join("map.tree"), "map\n└── it works\n").unwrap();
+        std::fs::write(dir.join("map.test.ts"), TESTED_TS).unwrap();
+        std::fs::write(dir.join("map.spec.ts"), TESTED_TS).unwrap();
+
+        let trees = vec![dir.join("map.tree")];
+        let scan = runner::find_uncovered(&packs("typescript"), std::slice::from_ref(&dir), &trees);
+        assert!(scan.failed.is_empty(), "{:?}", scan.failed);
+        let paths: Vec<_> = scan.uncovered.iter().map(|u| u.path.clone()).collect();
+        assert_eq!(paths, vec![dir.join("map.spec.ts")], "{:?}", scan.uncovered);
+    }
+}
+
+mod when_a_candidate_cannot_be_scanned {
+    use super::*;
+
+    // Unverifiable coverage must surface as a failure, not vanish — a
+    // strict project would otherwise pass because extraction broke.
+    #[test]
+    fn is_reported_as_failed() {
+        let dir = fixture_dir("unscannable");
+        std::fs::write(dir.join("map.test.ts"), [0xFF, 0xFE, 0x00, 0x01]).unwrap();
+
+        let scan = runner::find_uncovered(&packs("typescript"), std::slice::from_ref(&dir), &[]);
+        assert!(scan.uncovered.is_empty(), "{:?}", scan.uncovered);
+        assert_eq!(scan.failed.len(), 1, "{:?}", scan.failed);
+        assert_eq!(scan.failed[0].0, dir.join("map.test.ts"));
     }
 }

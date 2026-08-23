@@ -23,6 +23,7 @@ pub enum Case {
 
 /// How one category of spec node maps to an identifier.
 #[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct NameRule {
     /// Prefix to strip from the node text before transforming, e.g. "it ".
     #[serde(default)]
@@ -61,9 +62,17 @@ impl NameRule {
             }
             Case::Pascal => words(t).map(capitalize).collect(),
         };
-        match &self.add_prefix {
+        let out = match &self.add_prefix {
             Some(p) => format!("{p}{out}"),
             None => out,
+        };
+        // Identifier cases only: no language lets an identifier start with
+        // a digit ("it 2 plus 2 is 4" → _2_plus_2_is_4). Check and scaffold
+        // share this rule, so guarded names still round-trip.
+        if self.case != Case::Verbatim && out.starts_with(|c: char| c.is_ascii_digit()) {
+            format!("_{out}")
+        } else {
+            out
         }
     }
 }
@@ -80,7 +89,8 @@ fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
 
 /// Split node text into identifier-safe words, dropping punctuation.
 fn words(t: &str) -> impl Iterator<Item = &str> {
-    t.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty())
+    t.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
 }
 
 fn capitalize(w: &str) -> String {
@@ -105,6 +115,7 @@ pub enum RootMapping {
 
 /// A pack's complete node-text-to-identifier configuration.
 #[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct Mapping {
     /// How the root line maps onto the file.
     #[serde(default)]
@@ -132,14 +143,26 @@ mod tests {
 
         #[test]
         fn joins_words_with_underscores() {
-            let rule = NameRule { case: Case::Snake, ..Default::default() };
-            assert_eq!(rule.apply("when the key is present"), "when_the_key_is_present");
+            let rule = NameRule {
+                case: Case::Snake,
+                ..Default::default()
+            };
+            assert_eq!(
+                rule.apply("when the key is present"),
+                "when_the_key_is_present"
+            );
         }
 
         #[test]
         fn drops_punctuation() {
-            let rule = NameRule { case: Case::Snake, ..Default::default() };
-            assert_eq!(rule.apply("it returns `None`, always"), "it_returns_none_always");
+            let rule = NameRule {
+                case: Case::Snake,
+                ..Default::default()
+            };
+            assert_eq!(
+                rule.apply("it returns `None`, always"),
+                "it_returns_none_always"
+            );
         }
     }
 
@@ -189,7 +212,27 @@ mod tests {
                 add_prefix: Some("test_When".into()),
                 case: Case::Pascal,
             };
-            assert_eq!(rule.apply("when the caller is the owner"), "test_WhenTheCallerIsTheOwner");
+            assert_eq!(
+                rule.apply("when the caller is the owner"),
+                "test_WhenTheCallerIsTheOwner"
+            );
+        }
+    }
+
+    mod when_the_name_would_start_with_a_digit {
+        use super::*;
+
+        #[test]
+        fn prefixes_an_underscore() {
+            let rule = NameRule {
+                strip_prefix: Some("it ".into()),
+                case: Case::Snake,
+                ..Default::default()
+            };
+            assert_eq!(rule.apply("it 2 plus 2 is 4"), "_2_plus_2_is_4");
+            // Verbatim titles are strings, not identifiers: untouched.
+            let verbatim = NameRule::default();
+            assert_eq!(verbatim.apply("2 plus 2 is 4"), "2 plus 2 is 4");
         }
     }
 }

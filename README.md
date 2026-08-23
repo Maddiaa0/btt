@@ -108,6 +108,14 @@ it into CI or a pre-commit hook.
 | `btt packs` | list packs and where they resolve from |
 | `btt init [--skill]` | write `btt.toml` (+ Claude skill for agents) |
 
+## Benchmarks
+
+`cargo bench` runs the check pipeline over 40 generated tree/test pairs at
+1/4/8 threads (`benches/check.rs`); add `--features wasm` for the
+sandboxed-grammar group (fetch grammars first). Criterion keeps baselines
+under `target/criterion` — `cargo bench -- --save-baseline main` before a
+change, `-- --baseline main` after, to see the delta.
+
 ## Dogfood
 
 This repo checks itself: every module's tests follow `.tree` specs

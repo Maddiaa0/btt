@@ -2,10 +2,9 @@ use anyhow::{Context, Result, bail};
 use btt::check::Finding;
 use btt::config::{self, Level};
 use btt::extract::ActualKind;
-use btt::runner::{self, Target};
+use btt::runner;
 use btt::{check, pack, scaffold, tree};
 use clap::{Parser, Subcommand};
-use rayon::prelude::*;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -117,15 +116,11 @@ fn cmd_check(
         .num_threads(jobs.map_or(0, NonZeroUsize::get))
         .build()
         .context("building thread pool")?;
-    let reports: Vec<FileReport> = pool.install(|| {
-        tree_files
-            .par_iter()
-            .map(|tree_path| check_one(tree_path, root, &packs, cfg.check))
-            .collect()
-    });
+    let outcomes = pool.install(|| runner::check_all(&packs, &tree_files, cfg.check));
 
     let (mut errors, mut warnings) = (0usize, 0usize);
-    for report in &reports {
+    for outcome in &outcomes {
+        let report = render(outcome, root);
         errors += report.errors;
         warnings += report.warnings;
         for line in &report.lines {
@@ -139,16 +134,11 @@ fn cmd_check(
     Ok(if errors > 0 { ExitCode::FAILURE } else { ExitCode::SUCCESS })
 }
 
-fn check_one(
-    tree_path: &Path,
-    root: &Path,
-    packs: &[pack::Pack],
-    cfg: config::CheckConfig,
-) -> FileReport {
-    let rel = tree_path.strip_prefix(root).unwrap_or(tree_path);
+fn render(outcome: &runner::FileOutcome, root: &Path) -> FileReport {
+    let rel = outcome.tree_path.strip_prefix(root).unwrap_or(&outcome.tree_path);
     let mut report = FileReport { lines: Vec::new(), errors: 0, warnings: 0 };
-    match runner::resolve_target(tree_path, packs) {
-        Target::NotFound { candidates } => {
+    match &outcome.result {
+        runner::FileResult::NoTarget { candidates } => {
             report.errors += 1;
             report.lines.push(format!("✗ {} — no matching test file", rel.display()));
             for c in candidates.iter().take(4) {
@@ -156,32 +146,30 @@ fn check_one(
             }
             report.lines.push(format!("    hint: btt scaffold {}", rel.display()));
         }
-        Target::Found { pack, path } => match runner::check_file(pack, tree_path, &path, &cfg) {
-            // A broken file reports and counts as an error, but never
-            // aborts the rest of the run.
-            Err(e) => {
-                report.errors += 1;
-                report.lines.push(format!("✗ {}", rel.display()));
-                report.lines.push(format!("    error {e}"));
+        // A broken file reports and counts as an error, but never aborts
+        // the rest of the run.
+        runner::FileResult::Failed(e) => {
+            report.errors += 1;
+            report.lines.push(format!("✗ {}", rel.display()));
+            report.lines.push(format!("    error {e}"));
+        }
+        runner::FileResult::Checked { target, findings } if findings.is_empty() => {
+            let shown = target.file_name().unwrap_or(target.as_os_str());
+            report.lines.push(format!("✓ {} ({})", rel.display(), shown.to_string_lossy()));
+        }
+        runner::FileResult::Checked { target, findings } => {
+            report.lines.push(format!("✗ {} → {}", rel.display(), target.display()));
+            for r in findings {
+                let sev = if r.level == Level::Error {
+                    report.errors += 1;
+                    "error"
+                } else {
+                    report.warnings += 1;
+                    "warn "
+                };
+                report.lines.push(format!("    {sev} {}", describe(&r.finding, rel, target)));
             }
-            Ok(reported) if reported.is_empty() => {
-                let shown = path.file_name().unwrap_or(path.as_os_str());
-                report.lines.push(format!("✓ {} ({})", rel.display(), shown.to_string_lossy()));
-            }
-            Ok(reported) => {
-                report.lines.push(format!("✗ {} → {}", rel.display(), path.display()));
-                for r in &reported {
-                    let sev = if r.level == Level::Error {
-                        report.errors += 1;
-                        "error"
-                    } else {
-                        report.warnings += 1;
-                        "warn "
-                    };
-                    report.lines.push(format!("    {sev} {}", describe(&r.finding, rel, &path)));
-                }
-            }
-        },
+        }
     }
     report
 }

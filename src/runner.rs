@@ -6,6 +6,7 @@ use crate::error::{Error, Result};
 use crate::extract::{self, ActualKind};
 use crate::pack::Pack;
 use crate::tree;
+use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -120,6 +121,59 @@ pub fn check_file(
             }
         })
         .collect())
+}
+
+/// What happened when one tree file was checked.
+#[derive(Debug)]
+pub enum FileResult {
+    /// A target was found and checked; `findings` may be empty (a pass).
+    Checked {
+        /// The test file that was checked.
+        target: PathBuf,
+        /// Findings at their configured severities.
+        findings: Vec<Reported>,
+    },
+    /// No candidate test file exists for this tree.
+    NoTarget {
+        /// Every candidate path that was tried, in order.
+        candidates: Vec<PathBuf>,
+    },
+    /// The file could not be checked (unreadable, spec parse error, …).
+    Failed(Error),
+}
+
+/// Outcome of checking a single tree file within a run.
+#[derive(Debug)]
+pub struct FileOutcome {
+    /// The `.tree` file this outcome belongs to.
+    pub tree_path: PathBuf,
+    /// What happened.
+    pub result: FileResult,
+}
+
+/// Check many tree files, in parallel on the ambient rayon pool.
+///
+/// Files are independent: one broken file becomes a [`FileResult::Failed`]
+/// without affecting the rest. Outcomes are returned in input order. Callers
+/// control parallelism by running this inside `rayon::ThreadPool::install`
+/// (as `btt check -j` does); otherwise the global pool is used.
+#[must_use]
+pub fn check_all(packs: &[Pack], tree_files: &[PathBuf], cfg: CheckConfig) -> Vec<FileOutcome> {
+    tree_files
+        .par_iter()
+        .map(|tree_path| {
+            let result = match resolve_target(tree_path, packs) {
+                Target::NotFound { candidates } => FileResult::NoTarget { candidates },
+                Target::Found { pack, path } => {
+                    match check_file(pack, tree_path, &path, &cfg) {
+                        Ok(findings) => FileResult::Checked { target: path, findings },
+                        Err(e) => FileResult::Failed(e),
+                    }
+                }
+            };
+            FileOutcome { tree_path: tree_path.clone(), result }
+        })
+        .collect()
 }
 
 /// Count the number of expected tests in a spec (for summary output).

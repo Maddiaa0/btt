@@ -86,14 +86,21 @@ pub fn extract(pack: &Pack, target: &Path, source: &str) -> Result<Vec<ActualNod
     })?;
 
     let idx_of = |cap: &str| query.capture_index_for_name(cap);
-    let (Some(block_i), Some(block_name_i), Some(test_i), Some(test_name_i)) =
-        (idx_of("block"), idx_of("block.name"), idx_of("test"), idx_of("test.name"))
-    else {
-        return Err(Error::MissingCaptures { pack: pack.name().to_string() });
+    let (Some(block_i), Some(block_name_i), Some(test_i), Some(test_name_i)) = (
+        idx_of("block"),
+        idx_of("block.name"),
+        idx_of("test"),
+        idx_of("test.name"),
+    ) else {
+        return Err(Error::MissingCaptures {
+            pack: pack.name().to_string(),
+        });
     };
     let marker_i = idx_of("test.marker");
     if pack.manifest.extract.test_requires_marker && marker_i.is_none() {
-        return Err(Error::MissingMarkerCapture { pack: pack.name().to_string() });
+        return Err(Error::MissingMarkerCapture {
+            pack: pack.name().to_string(),
+        });
     }
 
     let mut captures: Vec<Capture> = Vec::new();
@@ -152,7 +159,9 @@ fn parse_source(
             parser.set_language(&language)?;
             let tree = parser
                 .parse(source, None)
-                .ok_or_else(|| Error::SourceParse { path: target.to_path_buf() })?;
+                .ok_or_else(|| Error::SourceParse {
+                    path: target.to_path_buf(),
+                })?;
             Ok((tree, language))
         }
         pack::Grammar::Wasm { symbol, bytes } => wasm::parse(pack, symbol, bytes, target, source),
@@ -203,8 +212,17 @@ mod wasm {
         h.finish()
     }
 
-    pub fn parse(pack: &Pack, symbol: &str, bytes: &[u8], target: &Path, source: &str) -> Result<(Tree, Language)> {
-        let err = |e: String| Error::WasmGrammar { pack: pack.name().to_string(), message: e };
+    pub fn parse(
+        pack: &Pack,
+        symbol: &str,
+        bytes: &[u8],
+        target: &Path,
+        source: &str,
+    ) -> Result<(Tree, Language)> {
+        let err = |e: String| Error::WasmGrammar {
+            pack: pack.name().to_string(),
+            message: e,
+        };
         STATE.with_borrow_mut(|state| {
             let print = fingerprint(bytes);
             match state.languages.get(symbol) {
@@ -226,9 +244,14 @@ mod wasm {
                     // The store goes back into the parser even when loading
                     // fails; dropping it here would orphan every language
                     // already compiled on this thread.
-                    state.parser.set_wasm_store(store).map_err(|e| err(e.to_string()))?;
+                    state
+                        .parser
+                        .set_wasm_store(store)
+                        .map_err(|e| err(e.to_string()))?;
                     let language = loaded.map_err(|e| err(e.to_string()))?;
-                    state.languages.insert(symbol.to_string(), (print, language));
+                    state
+                        .languages
+                        .insert(symbol.to_string(), (print, language));
                 }
             }
             let language = state.languages[symbol].1.clone();
@@ -236,7 +259,9 @@ mod wasm {
             let tree = state
                 .parser
                 .parse(source, None)
-                .ok_or_else(|| Error::SourceParse { path: target.to_path_buf() })?;
+                .ok_or_else(|| Error::SourceParse {
+                    path: target.to_path_buf(),
+                })?;
             Ok((tree, language))
         })
     }
@@ -257,7 +282,9 @@ mod wasm {
         _target: &Path,
         _source: &str,
     ) -> Result<(tree_sitter::Tree, tree_sitter::Language)> {
-        Err(Error::WasmUnsupported { pack: pack.name().to_string() })
+        Err(Error::WasmUnsupported {
+            pack: pack.name().to_string(),
+        })
     }
 }
 
@@ -270,7 +297,12 @@ fn build_nodes(captures: &[Capture], i: &mut usize, parent_end: usize) -> Vec<Ac
             ActualKind::Block => build_nodes(captures, i, c.end),
             ActualKind::Test => Vec::new(),
         };
-        out.push(ActualNode { kind: c.kind, name: c.name.clone(), line: c.line, children });
+        out.push(ActualNode {
+            kind: c.kind,
+            name: c.name.clone(),
+            line: c.line,
+            children,
+        });
     }
     out
 }

@@ -65,7 +65,9 @@ pub enum Error {
 
     /// A pack requests a `wasm:` grammar but this binary was built without
     /// the `wasm` feature.
-    #[error("pack `{pack}`: wasm grammars need a btt built with the `wasm` feature (cargo install btt --features wasm)")]
+    #[error(
+        "pack `{pack}`: wasm grammars need a btt built with the `wasm` feature (cargo install btt --features wasm)"
+    )]
     WasmUnsupported {
         /// The pack requesting the grammar.
         pack: String,
@@ -131,6 +133,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
     pub(crate) fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
-        Error::Io { path: path.into(), source }
+        Error::Io {
+            path: path.into(),
+            source,
+        }
     }
 }

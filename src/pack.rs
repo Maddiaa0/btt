@@ -60,7 +60,9 @@ pub enum GrammarSource {
 }
 
 impl<'de> Deserialize<'de> for GrammarSource {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
         if let Some(name) = s.strip_prefix("builtin:") {
             Ok(GrammarSource::Builtin(name.to_string()))
@@ -189,8 +191,11 @@ fn read(path: &Path) -> Result<String> {
 
 fn load_from_dir(dir: &Path, origin: Origin) -> Result<Pack> {
     let manifest_path = dir.join("pack.toml");
-    let manifest: Manifest = toml::from_str(&read(&manifest_path)?)
-        .map_err(|source| Error::Toml { path: manifest_path, source: Box::new(source) })?;
+    let manifest: Manifest =
+        toml::from_str(&read(&manifest_path)?).map_err(|source| Error::Toml {
+            path: manifest_path,
+            source: Box::new(source),
+        })?;
     let query = read(&dir.join(&manifest.extract.query))?;
     let template = read(&dir.join(&manifest.scaffold.template))?;
     let wasm_grammar = match &manifest.grammar.source {
@@ -200,7 +205,13 @@ fn load_from_dir(dir: &Path, origin: Origin) -> Result<Pack> {
         GrammarSource::Wasm(file) => std::fs::read(dir.join(file)).ok(),
         GrammarSource::Builtin(_) => None,
     };
-    Ok(Pack { manifest, query, template, wasm_grammar, origin })
+    Ok(Pack {
+        manifest,
+        query,
+        template,
+        wasm_grammar,
+        origin,
+    })
 }
 
 /// Load a pack from an explicit directory, bypassing the resolution order.
@@ -221,7 +232,10 @@ fn load_embedded(dir: &Dir<'static>) -> Result<Pack> {
     let file = |p: &str| -> Result<&'static str> {
         dir.get_file(dir.path().join(p))
             .and_then(include_dir::File::contents_utf8)
-            .ok_or_else(|| Error::PackFile { pack: pack_name.clone(), file: p.to_string() })
+            .ok_or_else(|| Error::PackFile {
+                pack: pack_name.clone(),
+                file: p.to_string(),
+            })
     };
     let manifest: Manifest = toml::from_str(file("pack.toml")?).map_err(|source| Error::Toml {
         path: PathBuf::from(format!("<builtin:{pack_name}>/pack.toml")),
@@ -230,12 +244,18 @@ fn load_embedded(dir: &Dir<'static>) -> Result<Pack> {
     let query = file(&manifest.extract.query)?.to_string();
     let template = file(&manifest.scaffold.template)?.to_string();
     let wasm_grammar = match &manifest.grammar.source {
-        GrammarSource::Wasm(file) => {
-            dir.get_file(dir.path().join(file)).map(|f| f.contents().to_vec())
-        }
+        GrammarSource::Wasm(file) => dir
+            .get_file(dir.path().join(file))
+            .map(|f| f.contents().to_vec()),
         GrammarSource::Builtin(_) => None,
     };
-    Ok(Pack { manifest, query, template, wasm_grammar, origin: Origin::Builtin })
+    Ok(Pack {
+        manifest,
+        query,
+        template,
+        wasm_grammar,
+        origin: Origin::Builtin,
+    })
 }
 
 /// Load a pack by name, honoring the resolution order.
@@ -258,7 +278,10 @@ pub fn load(name: &str, project_root: &Path) -> Result<Pack> {
     if let Some(dir) = EMBEDDED_PACKS.get_dir(name) {
         return load_embedded(dir);
     }
-    Err(Error::PackNotFound { name: name.to_string(), builtins: builtin_names() })
+    Err(Error::PackNotFound {
+        name: name.to_string(),
+        builtins: builtin_names(),
+    })
 }
 
 /// Names of all packs visible from a project, with their winning origin,
@@ -271,13 +294,16 @@ pub fn available(project_root: &Path) -> Vec<(String, Origin)> {
         vec![(project_root.join(".btt/packs"), Origin::Project as OriginCtor)];
     dirs.extend(user_pack_dirs().into_iter().map(|d| (d, Origin::User as OriginCtor)));
     for (dir, make_origin) in dirs {
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.join("pack.toml").is_file()
                 && let Some(name) = path.file_name().and_then(|n| n.to_str())
             {
-                map.entry(name.to_string()).or_insert_with(|| make_origin(path.clone()));
+                map.entry(name.to_string())
+                    .or_insert_with(|| make_origin(path.clone()));
             }
         }
     }
@@ -292,7 +318,11 @@ pub fn available(project_root: &Path) -> Vec<(String, Origin)> {
 pub fn builtin_names() -> Vec<String> {
     EMBEDDED_PACKS
         .dirs()
-        .filter_map(|d| d.path().file_name().map(|n| n.to_string_lossy().into_owned()))
+        .filter_map(|d| {
+            d.path()
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+        })
         .collect()
 }
 
@@ -346,21 +376,34 @@ pub enum Grammar<'a> {
 pub fn grammar_for<'a>(pack: &'a Pack, target: &Path) -> Result<Grammar<'a>> {
     match &pack.manifest.grammar.source {
         GrammarSource::Wasm(file) => {
-            let bytes = pack.wasm_grammar.as_deref().ok_or_else(|| Error::PackFile {
-                pack: pack.name().to_string(),
-                file: file.display().to_string(),
-            })?;
-            let symbol = pack.manifest.grammar.symbol.as_deref().unwrap_or(pack.name());
+            let bytes = pack
+                .wasm_grammar
+                .as_deref()
+                .ok_or_else(|| Error::PackFile {
+                    pack: pack.name().to_string(),
+                    file: file.display().to_string(),
+                })?;
+            let symbol = pack
+                .manifest
+                .grammar
+                .symbol
+                .as_deref()
+                .unwrap_or(pack.name());
             Ok(Grammar::Wasm { symbol, bytes })
         }
         GrammarSource::Builtin(name) => match name.as_str() {
             "rust" => Ok(Grammar::Native(tree_sitter_rust::LANGUAGE.into())),
             "typescript" => {
-                let ext = target.extension().and_then(|e| e.to_str()).unwrap_or_default();
+                let ext = target
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or_default();
                 if ext == "tsx" || ext == "jsx" {
                     Ok(Grammar::Native(tree_sitter_typescript::LANGUAGE_TSX.into()))
                 } else {
-                    Ok(Grammar::Native(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()))
+                    Ok(Grammar::Native(
+                        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+                    ))
                 }
             }
             other => Err(Error::UnknownGrammar {

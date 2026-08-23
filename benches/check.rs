@@ -62,11 +62,19 @@ fn setup_fixtures() -> Vec<PathBuf> {
 fn bench_pack(c: &mut Criterion, group_name: &str, pack: pack::Pack, tree_files: &[PathBuf]) {
     let packs = vec![pack];
     let mut group = c.benchmark_group(group_name);
-    group.sample_size(20).warm_up_time(Duration::from_secs(1)).measurement_time(Duration::from_secs(3));
+    group
+        .sample_size(20)
+        .warm_up_time(Duration::from_secs(1))
+        .measurement_time(Duration::from_secs(3));
     for jobs in JOBS {
-        let pool = rayon::ThreadPoolBuilder::new().num_threads(jobs).build().unwrap();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(jobs)
+            .build()
+            .unwrap();
         group.bench_with_input(BenchmarkId::new("jobs", jobs), &jobs, |b, _| {
-            b.iter(|| pool.install(|| runner::check_all(&packs, tree_files, CheckConfig::default())));
+            b.iter(|| {
+                pool.install(|| runner::check_all(&packs, tree_files, CheckConfig::default()))
+            });
         });
     }
     group.finish();

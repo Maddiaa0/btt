@@ -65,7 +65,10 @@ pub fn render(pack: &Pack, expected: &[Expected], stem: &str) -> Result<String> 
 
     let env = minijinja::Environment::new();
     let out = env
-        .render_str(&pack.template, minijinja::context! { events => events, stem => stem })
+        .render_str(
+            &pack.template,
+            minijinja::context! { events => events, stem => stem },
+        )
         .map_err(|source| Error::Template {
             pack: pack.name().to_string(),
             source: Box::new(source),

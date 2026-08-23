@@ -24,7 +24,12 @@ fn wasm_pack(name: &str) -> Pack {
     pack::load_dir(&dir).unwrap()
 }
 
-fn extract_both(builtin: &str, wasm: &str, target: &str, source: &str) -> (Vec<ActualNode>, Vec<ActualNode>) {
+fn extract_both(
+    builtin: &str,
+    wasm: &str,
+    target: &str,
+    source: &str,
+) -> (Vec<ActualNode>, Vec<ActualNode>) {
     let native_pack = pack::load(builtin, repo_root()).unwrap();
     let wasm_pack = wasm_pack(wasm);
     let native = extract::extract(&native_pack, Path::new(target), source).unwrap();
@@ -85,7 +90,8 @@ mod when_parsing_typescript_through_a_wasm_grammar {
 
     #[test]
     fn matches_the_native_extraction() {
-        let (native, sandboxed) = extract_both("typescript", "typescript", "map.test.ts", TS_SOURCE);
+        let (native, sandboxed) =
+            extract_both("typescript", "typescript", "map.test.ts", TS_SOURCE);
         assert!(!native.is_empty());
         assert_eq!(native, sandboxed);
     }
@@ -118,13 +124,16 @@ mod when_two_packs_share_a_grammar_symbol {
     #[test]
     fn reports_a_collision_instead_of_reusing_the_wrong_grammar() {
         let ts = wasm_pack("typescript");
-        assert!(!extract::extract(&ts, Path::new("map.test.ts"), TS_SOURCE).unwrap().is_empty());
+        assert!(
+            !extract::extract(&ts, Path::new("map.test.ts"), TS_SOURCE)
+                .unwrap()
+                .is_empty()
+        );
 
         // A different grammar claiming the already-loaded symbol.
         let mut imposter = wasm_pack("rust");
         imposter.manifest.grammar.symbol = Some("typescript".to_string());
-        let err =
-            extract::extract(&imposter, Path::new("map.rs"), RUST_SOURCE).unwrap_err();
+        let err = extract::extract(&imposter, Path::new("map.rs"), RUST_SOURCE).unwrap_err();
         assert!(err.to_string().contains("distinct symbol"), "{err}");
     }
 }

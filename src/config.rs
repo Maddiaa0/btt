@@ -30,7 +30,11 @@ pub struct CheckConfig {
 
 impl Default for CheckConfig {
     fn default() -> Self {
-        CheckConfig { extra: Level::Warn, order: Level::Warn, uncovered: Level::Warn }
+        CheckConfig {
+            extra: Level::Warn,
+            order: Level::Warn,
+            uncovered: Level::Warn,
+        }
     }
 }
 
@@ -87,7 +91,10 @@ pub fn load(project_root: &Path) -> Result<ProjectConfig> {
         return Ok(ProjectConfig::default());
     }
     let raw = std::fs::read_to_string(&path).map_err(|source| Error::io(&path, source))?;
-    toml::from_str(&raw).map_err(|source| Error::Toml { path, source: Box::new(source) })
+    toml::from_str(&raw).map_err(|source| Error::Toml {
+        path,
+        source: Box::new(source),
+    })
 }
 
 #[cfg(test)]

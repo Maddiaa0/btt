@@ -80,7 +80,8 @@ fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
 
 /// Split node text into identifier-safe words, dropping punctuation.
 fn words(t: &str) -> impl Iterator<Item = &str> {
-    t.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty())
+    t.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
 }
 
 fn capitalize(w: &str) -> String {
@@ -132,14 +133,26 @@ mod tests {
 
         #[test]
         fn joins_words_with_underscores() {
-            let rule = NameRule { case: Case::Snake, ..Default::default() };
-            assert_eq!(rule.apply("when the key is present"), "when_the_key_is_present");
+            let rule = NameRule {
+                case: Case::Snake,
+                ..Default::default()
+            };
+            assert_eq!(
+                rule.apply("when the key is present"),
+                "when_the_key_is_present"
+            );
         }
 
         #[test]
         fn drops_punctuation() {
-            let rule = NameRule { case: Case::Snake, ..Default::default() };
-            assert_eq!(rule.apply("it returns `None`, always"), "it_returns_none_always");
+            let rule = NameRule {
+                case: Case::Snake,
+                ..Default::default()
+            };
+            assert_eq!(
+                rule.apply("it returns `None`, always"),
+                "it_returns_none_always"
+            );
         }
     }
 
@@ -189,7 +202,10 @@ mod tests {
                 add_prefix: Some("test_When".into()),
                 case: Case::Pascal,
             };
-            assert_eq!(rule.apply("when the caller is the owner"), "test_WhenTheCallerIsTheOwner");
+            assert_eq!(
+                rule.apply("when the caller is the owner"),
+                "test_WhenTheCallerIsTheOwner"
+            );
         }
     }
 }

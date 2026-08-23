@@ -25,8 +25,7 @@ pub fn find_tree_files(paths: &[PathBuf]) -> Vec<PathBuf> {
                 && (name == ".git" || name == "target" || name == "node_modules"))
         });
         for entry in walker.flatten() {
-            if entry.file_type().is_file()
-                && entry.path().extension().is_some_and(|e| e == "tree")
+            if entry.file_type().is_file() && entry.path().extension().is_some_and(|e| e == "tree")
             {
                 out.push(entry.into_path());
             }
@@ -87,7 +86,9 @@ pub fn find_uncovered(packs: &[Pack], paths: &[PathBuf]) -> Vec<Uncovered> {
             if !entry.file_type().is_file() {
                 continue;
             }
-            let Some(name) = entry.file_name().to_str() else { continue };
+            let Some(name) = entry.file_name().to_str() else {
+                continue;
+            };
             let dir = entry.path().parent().unwrap_or(Path::new("."));
             let mut matched: Option<&Pack> = None;
             let mut covered = false;
@@ -115,7 +116,10 @@ pub fn find_uncovered(packs: &[Pack], paths: &[PathBuf]) -> Vec<Uncovered> {
             let source = std::fs::read_to_string(path).ok()?;
             let actual = extract::extract(pack, path, &source).ok()?;
             let tests = count_actual_tests(&actual);
-            (tests > 0).then(|| Uncovered { path: path.clone(), tests })
+            (tests > 0).then(|| Uncovered {
+                path: path.clone(),
+                tests,
+            })
         })
         .collect()
 }
@@ -141,13 +145,19 @@ pub enum Target<'a> {
 #[must_use]
 pub fn resolve_target<'a>(tree_path: &Path, packs: &'a [Pack]) -> Target<'a> {
     let dir = tree_path.parent().unwrap_or(Path::new("."));
-    let stem = tree_path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+    let stem = tree_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
     let mut candidates = Vec::new();
     for pack in packs {
         for pattern in &pack.manifest.detect.targets {
             let candidate = dir.join(pattern.replace("{stem}", stem));
             if candidate.is_file() {
-                return Target::Found { pack, path: candidate };
+                return Target::Found {
+                    pack,
+                    path: candidate,
+                };
             }
             candidates.push(candidate);
         }
@@ -177,12 +187,13 @@ pub fn check_file(
     target: &Path,
     cfg: &CheckConfig,
 ) -> Result<Vec<Reported>> {
-    let spec_src = std::fs::read_to_string(tree_path)
-        .map_err(|source| Error::io(tree_path, source))?;
-    let trees = tree::parse(&spec_src)
-        .map_err(|source| Error::Parse { path: tree_path.to_path_buf(), source })?;
-    let source =
-        std::fs::read_to_string(target).map_err(|source| Error::io(target, source))?;
+    let spec_src =
+        std::fs::read_to_string(tree_path).map_err(|source| Error::io(tree_path, source))?;
+    let trees = tree::parse(&spec_src).map_err(|source| Error::Parse {
+        path: tree_path.to_path_buf(),
+        source,
+    })?;
+    let source = std::fs::read_to_string(target).map_err(|source| Error::io(target, source))?;
 
     let mapping = &pack.manifest.mapping;
     let expected = check::expected_from_spec(&trees, mapping);
@@ -247,14 +258,18 @@ pub fn check_all(packs: &[Pack], tree_files: &[PathBuf], cfg: CheckConfig) -> Ve
         .map(|tree_path| {
             let result = match resolve_target(tree_path, packs) {
                 Target::NotFound { candidates } => FileResult::NoTarget { candidates },
-                Target::Found { pack, path } => {
-                    match check_file(pack, tree_path, &path, &cfg) {
-                        Ok(findings) => FileResult::Checked { target: path, findings },
-                        Err(e) => FileResult::Failed(e),
-                    }
-                }
+                Target::Found { pack, path } => match check_file(pack, tree_path, &path, &cfg) {
+                    Ok(findings) => FileResult::Checked {
+                        target: path,
+                        findings,
+                    },
+                    Err(e) => FileResult::Failed(e),
+                },
             };
-            FileOutcome { tree_path: tree_path.clone(), result }
+            FileOutcome {
+                tree_path: tree_path.clone(),
+                result,
+            }
         })
         .collect()
 }

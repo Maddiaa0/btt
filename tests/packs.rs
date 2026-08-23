@@ -71,12 +71,24 @@ describe("HashMap", () => {
 });
 "#;
         let findings = ts_findings(source);
-        let missing = findings
-            .iter()
-            .any(|f| matches!(f, Finding::Missing { kind: ActualKind::Test, .. }));
-        let extra = findings
-            .iter()
-            .any(|f| matches!(f, Finding::Extra { kind: ActualKind::Test, .. }));
+        let missing = findings.iter().any(|f| {
+            matches!(
+                f,
+                Finding::Missing {
+                    kind: ActualKind::Test,
+                    ..
+                }
+            )
+        });
+        let extra = findings.iter().any(|f| {
+            matches!(
+                f,
+                Finding::Extra {
+                    kind: ActualKind::Test,
+                    ..
+                }
+            )
+        });
         assert!(missing && extra, "{findings:?}");
     }
 }
@@ -119,7 +131,10 @@ mod when_scaffolding_from_a_tree {
         let (p, expected) = expected_for("typescript");
         let out = scaffold::render(&p, &expected, "map").unwrap();
         assert!(out.contains(r#"describe("HashMap", () => {"#), "{out}");
-        assert!(out.contains(r#"  describe("when the key is absent", () => {"#), "{out}");
+        assert!(
+            out.contains(r#"  describe("when the key is absent", () => {"#),
+            "{out}"
+        );
         assert!(out.contains(r#"it("returns none", () => {"#), "{out}");
     }
 }
@@ -135,8 +150,7 @@ mod when_a_builtin_pack_has_a_wasm_twin {
         for name in ["rust", "typescript"] {
             for rel in ["queries/tests.scm", "templates/test.jinja"] {
                 let read = |base: &str| {
-                    std::fs::read_to_string(repo_root().join(base).join(name).join(rel))
-                        .unwrap()
+                    std::fs::read_to_string(repo_root().join(base).join(name).join(rel)).unwrap()
                 };
                 assert_eq!(
                     read("packs"),

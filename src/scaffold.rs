@@ -63,7 +63,21 @@ pub fn render(pack: &Pack, expected: &[Expected], stem: &str) -> Result<String> 
     let mut events = Vec::new();
     flatten(expected, 0, &pack.manifest.scaffold.indent, &mut events);
 
-    let env = minijinja::Environment::new();
+    let mut env = minijinja::Environment::new();
+    // Escaping filters for interpolating spec text into code. Titles and
+    // descriptions are arbitrary text; without these, a quote in a title
+    // produces a scaffold that does not compile.
+    env.add_filter("js_string", |s: String| {
+        s.replace('\\', "\\\\").replace('"', "\\\"")
+    });
+    // Rust string literals that are also format strings (todo!) need brace
+    // doubling on top of quote/backslash escaping.
+    env.add_filter("rust_string", |s: String| {
+        s.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('{', "{{")
+            .replace('}', "}}")
+    });
     let out = env
         .render_str(
             &pack.template,

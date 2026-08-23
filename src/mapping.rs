@@ -62,9 +62,17 @@ impl NameRule {
             }
             Case::Pascal => words(t).map(capitalize).collect(),
         };
-        match &self.add_prefix {
+        let out = match &self.add_prefix {
             Some(p) => format!("{p}{out}"),
             None => out,
+        };
+        // Identifier cases only: no language lets an identifier start with
+        // a digit ("it 2 plus 2 is 4" → _2_plus_2_is_4). Check and scaffold
+        // share this rule, so guarded names still round-trip.
+        if self.case != Case::Verbatim && out.starts_with(|c: char| c.is_ascii_digit()) {
+            format!("_{out}")
+        } else {
+            out
         }
     }
 }
@@ -208,6 +216,23 @@ mod tests {
                 rule.apply("when the caller is the owner"),
                 "test_WhenTheCallerIsTheOwner"
             );
+        }
+    }
+
+    mod when_the_name_would_start_with_a_digit {
+        use super::*;
+
+        #[test]
+        fn prefixes_an_underscore() {
+            let rule = NameRule {
+                strip_prefix: Some("it ".into()),
+                case: Case::Snake,
+                ..Default::default()
+            };
+            assert_eq!(rule.apply("it 2 plus 2 is 4"), "_2_plus_2_is_4");
+            // Verbatim titles are strings, not identifiers: untouched.
+            let verbatim = NameRule::default();
+            assert_eq!(verbatim.apply("2 plus 2 is 4"), "2 plus 2 is 4");
         }
     }
 }

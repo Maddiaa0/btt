@@ -139,6 +139,32 @@ mod when_scaffolding_from_a_tree {
     }
 }
 
+mod when_scaffolding_hostile_spec_text {
+    use super::*;
+
+    #[test]
+    fn escapes_quotes_and_format_braces() {
+        let spec = "HashMap\n└── it returns \"yes\" for {braced} input\n";
+        let trees = tree::parse(spec).unwrap();
+
+        let ts = pack::load("typescript", repo_root()).unwrap();
+        let expected = check::expected_from_spec(&trees, &ts.manifest.mapping);
+        let out = scaffold::render(&ts, &expected, "map").unwrap();
+        assert!(
+            out.contains(r#"it("returns \"yes\" for {braced} input""#),
+            "{out}"
+        );
+
+        let rust = pack::load("rust", repo_root()).unwrap();
+        let expected = check::expected_from_spec(&trees, &rust.manifest.mapping);
+        let out = scaffold::render(&rust, &expected, "map").unwrap();
+        assert!(
+            out.contains(r#"todo!("it returns \"yes\" for {{braced}} input")"#),
+            "{out}"
+        );
+    }
+}
+
 mod when_a_builtin_pack_has_a_wasm_twin {
     use super::*;
 

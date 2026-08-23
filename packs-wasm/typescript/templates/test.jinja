@@ -2,12 +2,12 @@ import { describe, it } from "vitest"; // adjust for your runner (jest/bun have 
 
 {% for ev in events -%}
 {% if ev.kind == "open" -%}
-{{ ev.indent }}describe("{{ ev.name }}", () => {
+{{ ev.indent }}describe("{{ ev.name | js_string }}", () => {
 {% elif ev.kind == "close" -%}
 {{ ev.indent }}});
 
 {% elif ev.kind == "test" -%}
-{{ ev.indent }}it("{{ ev.name }}", () => {
+{{ ev.indent }}it("{{ ev.name | js_string }}", () => {
 {{ ev.indent }}  // TODO: {{ ev.text }}
 {{ ev.indent }}});
 

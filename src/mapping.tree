@@ -6,5 +6,7 @@ mapping rules
 │   ├── it removes it case insensitively
 │   ├── it leaves other text untouched
 │   └── it survives multibyte text at the boundary
-└── when applying pascal case
-    └── it capitalizes each word
+├── when applying pascal case
+│   └── it capitalizes each word
+└── when the name would start with a digit
+    └── it prefixes an underscore

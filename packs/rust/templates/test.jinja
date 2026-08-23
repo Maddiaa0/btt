@@ -9,7 +9,7 @@
 {% elif ev.kind == "test" -%}
 {{ ev.indent }}#[test]
 {{ ev.indent }}fn {{ ev.name }}() {
-{{ ev.indent }}    todo!("{{ ev.text }}");
+{{ ev.indent }}    todo!("{{ ev.text | rust_string }}");
 {{ ev.indent }}}
 
 {% endif -%}

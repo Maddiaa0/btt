@@ -1,0 +1,6 @@
+config discovery
+└── when finding the nearest config
+    ├── it finds a config beside the tree file
+    ├── it walks up to an ancestor within the root
+    ├── it stops at the invocation root
+    └── it returns none without any config

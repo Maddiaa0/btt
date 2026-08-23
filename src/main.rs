@@ -95,6 +95,27 @@ fn cmd_check(paths: &[PathBuf], root: &Path, cfg: &config::ProjectConfig) -> Res
         return Ok(ExitCode::SUCCESS);
     }
 
+    // Config is read only from the invocation root; surface any nested
+    // btt.toml that governs a subtree but is not being applied.
+    let mut nested_configs = std::collections::BTreeSet::new();
+    for tree_path in &tree_files {
+        let dir = tree_path.parent().unwrap_or(Path::new("."));
+        let dir = std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
+        if let Some(cfg_dir) = config::nearest_config_dir(&dir, root)
+            && cfg_dir != root
+        {
+            nested_configs.insert(cfg_dir);
+        }
+    }
+    for dir in &nested_configs {
+        println!(
+            "note: ignoring nested config {} (config is read only from {}); run btt from {} to apply it",
+            dir.join("btt.toml").display(),
+            root.join("btt.toml").display(),
+            dir.display()
+        );
+    }
+
     let mut errors = 0usize;
     let mut warnings = 0usize;
     for tree_path in &tree_files {

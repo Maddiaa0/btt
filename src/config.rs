@@ -24,11 +24,13 @@ pub struct CheckConfig {
     pub extra: Level,
     /// Severity of sibling order differing between tree and file.
     pub order: Level,
+    /// Severity of test-bearing source files that no `.tree` spec covers.
+    pub uncovered: Level,
 }
 
 impl Default for CheckConfig {
     fn default() -> Self {
-        CheckConfig { extra: Level::Warn, order: Level::Warn }
+        CheckConfig { extra: Level::Warn, order: Level::Warn, uncovered: Level::Warn }
     }
 }
 

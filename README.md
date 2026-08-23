@@ -83,9 +83,28 @@ $XDG_CONFIG_HOME/btt/packs/<name>/   # user-global (default ~/.config/btt/packs)
 Adding a language never means rebuilding the binary: drop a pack folder in
 `.btt/packs/` and it loads at runtime. Packs contain no executable code
 (manifest + query + templates), so vendoring one is reviewable like any
-config change. Grammars currently come compiled into the core
-(`builtin:rust`, `builtin:typescript`); sandboxed `wasm:` grammar loading is
-the planned extension point for fully self-contained packs.
+config change.
+
+### Sandboxed WASM grammars (experimental)
+
+With the `wasm` feature (`cargo install btt --features wasm`), a pack can
+ship its own grammar instead of relying on a builtin:
+
+```toml
+[grammar]
+source = "wasm:grammar.wasm"   # a `tree-sitter build --wasm` artifact
+symbol = "rust"                # module exports tree_sitter_<symbol>
+```
+
+This is the same architecture Zed uses: the tree-sitter runtime stays
+native, while the grammar module — including any external scanner code, the
+only arbitrary code a grammar ships — is instantiated in a wasmtime store
+with no WASI, so it cannot touch the filesystem or network. The
+`packs-wasm/` directory holds wasm twins of the builtin packs (grammars
+fetched by `scripts/fetch-wasm-grammars.sh`, pinned by release tag and
+sha256), and `tests/wasm.rs` proves they extract structure identical to the
+natively compiled grammars. Without the feature, the core stays lean and
+wasm packs fail with a clear error.
 
 ## Configuration
 
@@ -98,19 +117,41 @@ packs = ["rust"]        # routing-priority order
 [check]
 extra = "warn"          # tests in the file but not the tree: error|warn|ignore
 order = "warn"          # sibling order drift: error|warn|ignore
+uncovered = "warn"      # test-bearing files with no .tree spec: error|warn|ignore
 ```
 
 Missing tests are always errors. `btt check` exits non-zero on errors — wire
 it into CI or a pre-commit hook.
 
+`uncovered` is what makes partial adoption honest: `check` reports not just
+"the covered files match" but "these files have tests and no spec at all"
+(it reverse-matches each pack's target patterns and extracts, so a repo with
+zero `.tree` files reports every test file instead of a hollow pass). Keep
+it at `warn` while adopting; in CI, ratchet everything to strict:
+
+```toml
+[check]
+extra = "error"
+order = "error"
+uncovered = "error"
+```
+
 ## Commands
 
 | command | |
 |---|---|
-| `btt check [paths]` | diff every `.tree` against its test file |
+| `btt check [paths] [-j N]` | diff every `.tree` against its test file (parallel; `-j` caps threads) |
 | `btt scaffold <tree>` | generate a skeleton (`--stdout`, `--force`, `--pack`) |
 | `btt packs` | list packs and where they resolve from |
 | `btt init [--skill]` | write `btt.toml` (+ Claude skill for agents) |
+
+## Benchmarks
+
+`cargo bench` runs the check pipeline over 40 generated tree/test pairs at
+1/4/8 threads (`benches/check.rs`); add `--features wasm` for the
+sandboxed-grammar group (fetch grammars first). Criterion keeps baselines
+under `target/criterion` — `cargo bench -- --save-baseline main` before a
+change, `-- --baseline main` after, to see the delta.
 
 ## Dogfood
 

@@ -3,6 +3,10 @@ language packs
 │   └── it reports no findings
 ├── when checking a drifted typescript file
 │   └── it reports the missing and extra test
-└── when scaffolding from a tree
-    ├── it renders rust modules and test functions
-    └── it renders nested describe blocks
+├── when checking a playwright style file
+│   └── it treats test describe as a block
+├── when scaffolding from a tree
+│   ├── it renders rust modules and test functions
+│   └── it renders nested describe blocks
+└── when a builtin pack has a wasm twin
+    └── it keeps queries and templates identical

@@ -63,11 +63,21 @@ pub enum Error {
         name: String,
     },
 
-    /// A pack requests a `wasm:` grammar, which is not supported yet.
-    #[error("pack `{pack}`: wasm grammars are not supported yet")]
+    /// A pack requests a `wasm:` grammar but this binary was built without
+    /// the `wasm` feature.
+    #[error("pack `{pack}`: wasm grammars need a btt built with the `wasm` feature (cargo install btt --features wasm)")]
     WasmUnsupported {
         /// The pack requesting the grammar.
         pack: String,
+    },
+
+    /// Loading or instantiating a pack's WASM grammar failed.
+    #[error("pack `{pack}`: wasm grammar error: {message}")]
+    WasmGrammar {
+        /// The pack owning the grammar.
+        pack: String,
+        /// The underlying wasm engine error, stringified.
+        message: String,
     },
 
     /// The grammar rejected by the tree-sitter runtime (version mismatch).

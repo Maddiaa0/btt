@@ -1,0 +1,35 @@
+[pack]
+name = "rust-wasm"
+version = "0.1.0"
+description = "Rust tests: nested `mod` blocks for branches, #[test] fns for leaves"
+
+[detect]
+extensions = ["rs"]
+targets = ["{stem}.rs"]
+
+[grammar]
+source = "wasm:grammar.wasm"
+symbol = "rust"
+
+[extract]
+query = "queries/tests.scm"
+# A fn only counts as a test if a #[test]-like attribute precedes it.
+test_requires_marker = true
+
+[mapping]
+# The tree root is the file itself; top-level conditions become top-level mods.
+root = "file"
+# `#[cfg(test)] mod tests { ... }` wrappers are structurally transparent.
+wrappers = ["tests"]
+
+[mapping.block]
+case = "snake"
+
+[mapping.test]
+strip_prefix = "it "
+case = "snake"
+
+[scaffold]
+template = "templates/test.jinja"
+output = "{stem}.rs"
+indent = "    "

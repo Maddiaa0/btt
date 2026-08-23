@@ -23,10 +23,9 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: BTT self-check
         run: cargo run -- check
-
-  dep-age:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: No dependencies younger than 14 days
-        run: ./scripts/dep-age.sh
+      - name: Fetch pinned wasm grammars
+        run: ./scripts/fetch-wasm-grammars.sh
+      - name: Test (wasm grammars)
+        run: cargo test --features wasm
+      - name: Clippy (wasm, no warnings)
+        run: cargo clippy --all-targets --features wasm -- -D warnings

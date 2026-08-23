@@ -56,7 +56,6 @@ pub enum GrammarSource {
     /// A grammar compiled into the core binary (`builtin:<name>`).
     Builtin(String),
     /// A sandboxed WASM grammar shipped with the pack (`wasm:<file>`).
-    /// Reserved: not supported yet.
     Wasm(PathBuf),
 }
 
@@ -80,6 +79,10 @@ impl<'de> Deserialize<'de> for GrammarSource {
 pub struct GrammarConfig {
     /// Grammar source.
     pub source: GrammarSource,
+    /// Language symbol exported by a WASM grammar (`tree_sitter_<symbol>`).
+    /// Defaults to the pack name.
+    #[serde(default)]
+    pub symbol: Option<String>,
 }
 
 /// Extraction section of a pack manifest.
@@ -160,6 +163,8 @@ pub struct Pack {
     pub query: String,
     /// Contents of the scaffold template.
     pub template: String,
+    /// Bytes of the pack's WASM grammar, when it ships one.
+    pub wasm_grammar: Option<Vec<u8>>,
     /// Where this pack was resolved from.
     pub origin: Origin,
 }
@@ -188,7 +193,23 @@ fn load_from_dir(dir: &Path, origin: Origin) -> Result<Pack> {
         .map_err(|source| Error::Toml { path: manifest_path, source: Box::new(source) })?;
     let query = read(&dir.join(&manifest.extract.query))?;
     let template = read(&dir.join(&manifest.scaffold.template))?;
-    Ok(Pack { manifest, query, template, origin })
+    let wasm_grammar = match &manifest.grammar.source {
+        // An unreadable grammar file is not a load error: it surfaces
+        // per-file at parse time (via `grammar_for`), so one broken wasm
+        // pack can't abort a whole run.
+        GrammarSource::Wasm(file) => std::fs::read(dir.join(file)).ok(),
+        GrammarSource::Builtin(_) => None,
+    };
+    Ok(Pack { manifest, query, template, wasm_grammar, origin })
+}
+
+/// Load a pack from an explicit directory, bypassing the resolution order.
+///
+/// # Errors
+///
+/// Fails if the directory does not contain a valid pack.
+pub fn load_dir(dir: &Path) -> Result<Pack> {
+    load_from_dir(dir, Origin::Project(dir.to_path_buf()))
 }
 
 fn load_embedded(dir: &Dir<'static>) -> Result<Pack> {
@@ -208,7 +229,13 @@ fn load_embedded(dir: &Dir<'static>) -> Result<Pack> {
     })?;
     let query = file(&manifest.extract.query)?.to_string();
     let template = file(&manifest.scaffold.template)?.to_string();
-    Ok(Pack { manifest, query, template, origin: Origin::Builtin })
+    let wasm_grammar = match &manifest.grammar.source {
+        GrammarSource::Wasm(file) => {
+            dir.get_file(dir.path().join(file)).map(|f| f.contents().to_vec())
+        }
+        GrammarSource::Builtin(_) => None,
+    };
+    Ok(Pack { manifest, query, template, wasm_grammar, origin: Origin::Builtin })
 }
 
 /// Load a pack by name, honoring the resolution order.
@@ -296,23 +323,44 @@ fn user_pack_dirs_from(xdg_config_home: Option<PathBuf>, home: Option<PathBuf>) 
     dirs
 }
 
-/// Resolve the tree-sitter language for a pack + target file.
+/// A pack's grammar, resolved for a specific target file.
+#[derive(Debug)]
+pub enum Grammar<'a> {
+    /// A grammar compiled into this binary.
+    Native(tree_sitter::Language),
+    /// A sandboxed WASM grammar shipped by the pack.
+    Wasm {
+        /// The language symbol the module exports (`tree_sitter_<symbol>`).
+        symbol: &'a str,
+        /// The compiled grammar module.
+        bytes: &'a [u8],
+    },
+}
+
+/// Resolve the grammar for a pack + target file.
 ///
 /// # Errors
 ///
-/// Fails if the pack references an unknown builtin grammar or an
-/// unsupported grammar source.
-pub fn language_for(pack: &Pack, target: &Path) -> Result<tree_sitter::Language> {
+/// Fails if the pack references an unknown builtin grammar or ships a
+/// `wasm:` grammar whose file was not loaded.
+pub fn grammar_for<'a>(pack: &'a Pack, target: &Path) -> Result<Grammar<'a>> {
     match &pack.manifest.grammar.source {
-        GrammarSource::Wasm(_) => Err(Error::WasmUnsupported { pack: pack.name().to_string() }),
+        GrammarSource::Wasm(file) => {
+            let bytes = pack.wasm_grammar.as_deref().ok_or_else(|| Error::PackFile {
+                pack: pack.name().to_string(),
+                file: file.display().to_string(),
+            })?;
+            let symbol = pack.manifest.grammar.symbol.as_deref().unwrap_or(pack.name());
+            Ok(Grammar::Wasm { symbol, bytes })
+        }
         GrammarSource::Builtin(name) => match name.as_str() {
-            "rust" => Ok(tree_sitter_rust::LANGUAGE.into()),
+            "rust" => Ok(Grammar::Native(tree_sitter_rust::LANGUAGE.into())),
             "typescript" => {
                 let ext = target.extension().and_then(|e| e.to_str()).unwrap_or_default();
                 if ext == "tsx" || ext == "jsx" {
-                    Ok(tree_sitter_typescript::LANGUAGE_TSX.into())
+                    Ok(Grammar::Native(tree_sitter_typescript::LANGUAGE_TSX.into()))
                 } else {
-                    Ok(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+                    Ok(Grammar::Native(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()))
                 }
             }
             other => Err(Error::UnknownGrammar {

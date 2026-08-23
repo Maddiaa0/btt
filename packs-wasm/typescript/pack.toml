@@ -1,0 +1,38 @@
+[pack]
+name = "typescript-wasm"
+version = "0.1.0"
+description = "TypeScript/JavaScript tests: describe blocks for branches, it/test for leaves (vitest, jest, bun)"
+
+[detect]
+# No tsx/jsx: this pack ships only the plain TypeScript grammar. TSX is a
+# separate tree-sitter module — a tsx pack would ship its own grammar.wasm.
+extensions = ["ts", "mts", "cts", "js", "mjs"]
+targets = [
+  "{stem}.test.ts",
+  "{stem}.spec.ts",
+  "{stem}.test.js",
+  "{stem}.spec.js",
+]
+
+[grammar]
+source = "wasm:grammar.wasm"
+symbol = "typescript"
+
+[extract]
+query = "queries/tests.scm"
+
+[mapping]
+# The tree root must appear as a top-level describe block.
+root = "block"
+
+[mapping.block]
+case = "verbatim"
+
+[mapping.test]
+strip_prefix = "it "
+case = "verbatim"
+
+[scaffold]
+template = "templates/test.jinja"
+output = "{stem}.test.ts"
+indent = "  "

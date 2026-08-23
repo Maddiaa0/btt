@@ -2,9 +2,10 @@ use anyhow::{Context, Result, bail};
 use btt::check::Finding;
 use btt::config::{self, Level};
 use btt::extract::ActualKind;
-use btt::runner::{self, Target};
+use btt::runner;
 use btt::{check, pack, scaffold, tree};
 use clap::{Parser, Subcommand};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -21,6 +22,9 @@ enum Command {
     Check {
         /// Tree files or directories to search (default: project root).
         paths: Vec<PathBuf>,
+        /// Number of files to check in parallel (default: one per core).
+        #[arg(short, long)]
+        jobs: Option<NonZeroUsize>,
     },
     /// Generate a test-file skeleton from a .tree spec.
     Scaffold {
@@ -66,7 +70,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
     let cfg = config::load(&root)?;
 
     match cli.command {
-        Command::Check { paths } => cmd_check(&paths, &root, &cfg),
+        Command::Check { paths, jobs } => cmd_check(&paths, jobs, &root, &cfg),
         Command::Scaffold { tree, pack, output, force, stdout } => {
             cmd_scaffold(&tree, pack, output, force, stdout, &root, &cfg)
         }
@@ -86,11 +90,43 @@ fn load_packs(root: &Path, cfg: &config::ProjectConfig) -> Result<Vec<pack::Pack
     Ok(names.iter().map(|n| pack::load(n, root)).collect::<btt::Result<_>>()?)
 }
 
-fn cmd_check(paths: &[PathBuf], root: &Path, cfg: &config::ProjectConfig) -> Result<ExitCode> {
+/// The rendered outcome of checking one tree file, assembled off-thread so
+/// parallel runs print deterministically, in file order.
+struct FileReport {
+    lines: Vec<String>,
+    errors: usize,
+    warnings: usize,
+}
+
+fn cmd_check(
+    paths: &[PathBuf],
+    jobs: Option<NonZeroUsize>,
+    root: &Path,
+    cfg: &config::ProjectConfig,
+) -> Result<ExitCode> {
     let packs = load_packs(root, cfg)?;
     let search = if paths.is_empty() { vec![root.to_path_buf()] } else { paths.to_vec() };
     let tree_files = runner::find_tree_files(&search);
-    if tree_files.is_empty() {
+
+    let run = || {
+        let outcomes = runner::check_all(&packs, &tree_files, cfg.check);
+        let uncovered = match cfg.check.uncovered {
+            Level::Ignore => Vec::new(),
+            Level::Error | Level::Warn => runner::find_uncovered(&packs, &search),
+        };
+        (outcomes, uncovered)
+    };
+    let (outcomes, uncovered) = match jobs {
+        Some(jobs) => rayon::ThreadPoolBuilder::new()
+            .num_threads(jobs.get())
+            .build()
+            .context("building thread pool")?
+            .install(run),
+        // No -j: the lazily-built global rayon pool (one thread per core).
+        None => run(),
+    };
+
+    if tree_files.is_empty() && uncovered.is_empty() {
         println!("no .tree files found");
         return Ok(ExitCode::SUCCESS);
     }
@@ -116,45 +152,89 @@ fn cmd_check(paths: &[PathBuf], root: &Path, cfg: &config::ProjectConfig) -> Res
         );
     }
 
-    let mut errors = 0usize;
-    let mut warnings = 0usize;
-    for tree_path in &tree_files {
-        let rel = tree_path.strip_prefix(root).unwrap_or(tree_path);
-        match runner::resolve_target(tree_path, &packs) {
-            Target::NotFound { candidates } => {
-                errors += 1;
-                println!("✗ {} — no matching test file", rel.display());
-                for c in candidates.iter().take(4) {
-                    println!("    tried {}", c.display());
-                }
-                println!("    hint: btt scaffold {}", rel.display());
+    let (mut errors, mut warnings) = (0usize, 0usize);
+    for outcome in &outcomes {
+        let report = render(outcome, root);
+        errors += report.errors;
+        warnings += report.warnings;
+        for line in &report.lines {
+            println!("{line}");
+        }
+    }
+    for u in &uncovered {
+        let rel = u.path.strip_prefix(root).unwrap_or(&u.path);
+        let sev = if cfg.check.uncovered == Level::Error {
+            errors += 1;
+            "✗"
+        } else {
+            warnings += 1;
+            "!"
+        };
+        println!("{sev} {} — {} test(s), not covered by any .tree", rel.display(), u.tests);
+    }
+    if !uncovered.is_empty() {
+        println!("    hint: write a .tree next to each file mirroring its tests");
+    }
+    // Only claim an uncovered count when the scan actually ran.
+    let uncovered_part = if cfg.check.uncovered == Level::Ignore {
+        String::new()
+    } else {
+        format!("{} uncovered, ", uncovered.len())
+    };
+    println!(
+        "\n{} tree file(s), {uncovered_part}{errors} error(s), {warnings} warning(s)",
+        tree_files.len()
+    );
+    // Spec drift exits 1; a file that could not be checked at all is a tool
+    // failure and exits 2, like every other tool error.
+    let failed = outcomes.iter().any(|o| matches!(o.result, runner::FileResult::Failed(_)));
+    Ok(if failed {
+        ExitCode::from(2)
+    } else if errors > 0 {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    })
+}
+
+fn render(outcome: &runner::FileOutcome, root: &Path) -> FileReport {
+    let rel = outcome.tree_path.strip_prefix(root).unwrap_or(&outcome.tree_path);
+    let mut report = FileReport { lines: Vec::new(), errors: 0, warnings: 0 };
+    match &outcome.result {
+        runner::FileResult::NoTarget { candidates } => {
+            report.errors += 1;
+            report.lines.push(format!("✗ {} — no matching test file", rel.display()));
+            for c in candidates.iter().take(4) {
+                report.lines.push(format!("    tried {}", c.display()));
             }
-            Target::Found { pack, path } => {
-                let reported = runner::check_file(pack, tree_path, &path, &cfg.check)?;
-                if reported.is_empty() {
-                    let shown = path.file_name().unwrap_or(path.as_os_str());
-                    println!("✓ {} ({})", rel.display(), shown.to_string_lossy());
-                    continue;
-                }
-                println!("✗ {} → {}", rel.display(), path.display());
-                for r in &reported {
-                    let sev = if r.level == Level::Error {
-                        errors += 1;
-                        "error"
-                    } else {
-                        warnings += 1;
-                        "warn "
-                    };
-                    println!("    {sev} {}", describe(&r.finding, rel, &path));
-                }
+            report.lines.push(format!("    hint: btt scaffold {}", rel.display()));
+        }
+        // A broken file reports and counts as an error, but never aborts
+        // the rest of the run.
+        runner::FileResult::Failed(e) => {
+            report.errors += 1;
+            report.lines.push(format!("✗ {}", rel.display()));
+            report.lines.push(format!("    error {e}"));
+        }
+        runner::FileResult::Checked { target, findings } if findings.is_empty() => {
+            let shown = target.file_name().unwrap_or(target.as_os_str());
+            report.lines.push(format!("✓ {} ({})", rel.display(), shown.to_string_lossy()));
+        }
+        runner::FileResult::Checked { target, findings } => {
+            report.lines.push(format!("✗ {} → {}", rel.display(), target.display()));
+            for r in findings {
+                let sev = if r.level == Level::Error {
+                    report.errors += 1;
+                    "error"
+                } else {
+                    report.warnings += 1;
+                    "warn "
+                };
+                report.lines.push(format!("    {sev} {}", describe(&r.finding, rel, target)));
             }
         }
     }
-    println!(
-        "\n{} tree file(s), {errors} error(s), {warnings} warning(s)",
-        tree_files.len()
-    );
-    Ok(if errors > 0 { ExitCode::FAILURE } else { ExitCode::SUCCESS })
+    report
 }
 
 fn describe(finding: &Finding, tree_rel: &Path, target: &Path) -> String {
@@ -256,6 +336,9 @@ packs = ["rust"]
 extra = "warn"
 # Severity of sibling order differing between tree and file: error | warn | ignore
 order = "warn"
+# Severity of test-bearing files with no .tree spec: error | warn | ignore
+# (warn while adopting; set to "error" in CI once every file has a tree)
+uncovered = "warn"
 "#;
 
 fn cmd_init(root: &Path, skill: bool) -> Result<ExitCode> {
@@ -270,8 +353,12 @@ fn cmd_init(root: &Path, skill: bool) -> Result<ExitCode> {
         let skill_dir = root.join(".claude/skills/btt");
         std::fs::create_dir_all(&skill_dir)?;
         let skill_path = skill_dir.join("SKILL.md");
-        std::fs::write(&skill_path, include_str!("../assets/SKILL.md"))?;
-        println!("wrote {}", skill_path.display());
+        if skill_path.exists() {
+            println!("{} already exists, leaving it untouched", skill_path.display());
+        } else {
+            std::fs::write(&skill_path, include_str!("../assets/SKILL.md"))?;
+            println!("wrote {}", skill_path.display());
+        }
     } else {
         println!(
             "tip: `btt init --skill` writes a Claude skill teaching agents the tree-first workflow"

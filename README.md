@@ -25,8 +25,30 @@ $ btt check                      # verify every .tree matches its test file
 
 A glance at the `.tree` files tells you the whole behavior surface of a test
 suite without reading test code — and gives coding agents a spec to write
-tests against (`btt init --skill` installs a Claude skill teaching the
-tree-first workflow).
+tests against.
+
+## Install
+
+```sh
+cargo install --path .   # installs to ~/.cargo/bin/btt
+```
+
+Then in each project you want checked: `btt init` writes a starter
+`btt.toml`; add `--skill` to also install the agent skill described below.
+
+## Agents
+
+btt is built for the loop where an agent writes the tests: the `.tree` file
+is the spec, the agent scaffolds and fills it in, and `btt check` keeps it
+honest. Two copy-paste files in this repo — they are **not** interchangeable:
+
+- **[AGENT-SETUP.md](AGENT-SETUP.md)** — a one-time prompt. Paste it into a
+  *chat* with your coding agent and it installs btt and initializes your
+  project for you. It does not belong in any config file.
+- **[SNIPPET.md](SNIPPET.md)** — permanent instructions. Paste it into your
+  `CLAUDE.md` / `AGENTS.md` so agents work tree-first. Claude Code users can
+  skip it: `btt init --skill` installs a richer skill at
+  `.claude/skills/btt/SKILL.md` instead.
 
 ## Architecture
 

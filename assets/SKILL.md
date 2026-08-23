@@ -20,6 +20,8 @@ of truth for what a test file contains; `btt check` enforces it.
 3. **Implement** the test bodies. Do not rename or restructure the generated
    blocks/tests — names encode the tree.
 4. **Verify:** run `btt check` before finishing any task that touched tests.
+   While iterating, scope it to specific `.tree` files or directories
+   (`btt check src/map.tree`); the bare command checks the whole project.
    Missing tests are errors; extra tests and ordering drift are warnings.
    Fix by updating the tree (if behavior legitimately changed) or the tests —
    never by deleting spec lines just to silence the check.

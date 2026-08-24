@@ -1,0 +1,15 @@
+thin pack installation
+├── when adding a local pack
+│   ├── it copies only the manifest closure
+│   └── it refuses to replace an existing pack
+├── when the source contains an unsafe pack name
+│   └── it refuses to write outside the packs directory
+├── when selecting a pack subdirectory
+│   └── it rejects paths outside the source
+├── when the project packs directory escapes
+│   └── it refuses to write outside the project
+├── when adding a git repository
+│   └── it clones and adds the pack
+└── when parsing a git source
+    ├── it expands a github shorthand
+    └── it rejects an unknown source

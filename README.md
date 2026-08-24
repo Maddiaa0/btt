@@ -136,6 +136,17 @@ Packs carry independent `SemVer` versions, a manifest-format version, and a
 policy and maintainer workflow are documented in
 [docs/pack-releases.md](docs/pack-releases.md).
 
+Add one from a local directory or Git repository, then name it in
+`btt.toml`. Packs in a monorepo use `--dir` to select their directory:
+
+```console
+$ btt pack add owner/repo --dir packs/python
+```
+
+This vendors only the files named by the pack manifest into
+`.btt/packs/<name>`; Git and your project history provide distribution,
+review, and versioning.
+
 ## Configuration
 
 `btt.toml` at the repo root:
@@ -161,4 +172,5 @@ Missing tests are always errors, and `btt check` exits non-zero on errors.
 | `btt check [paths] [-j N]` | diff every `.tree` against its test file (parallel; `-j` caps threads) |
 | `btt scaffold <tree>` | generate a skeleton (`--stdout`, `--force`, `--pack`) |
 | `btt packs` | list packs and where they resolve from |
+| `btt pack add <source> [--dir <path>]` | vendor one local or Git-hosted pack into this project |
 | `btt init [--skill]` | write `btt.toml` (+ Claude skill for agents) |

@@ -9,6 +9,8 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+mod pack_add;
+
 #[derive(Parser)]
 #[command(name = "btt", version, about = "Branch tree testing, for any language")]
 struct Cli {
@@ -45,11 +47,28 @@ enum Command {
     },
     /// List available language packs and where they come from.
     Packs,
+    /// Add a language pack to this project.
+    Pack {
+        #[command(subcommand)]
+        command: PackCommand,
+    },
     /// Create btt.toml (and optionally an agent skill) in this project.
     Init {
         /// Also write .claude/skills/btt/SKILL.md for coding agents.
         #[arg(long)]
         skill: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum PackCommand {
+    /// Add one pack from a local directory or Git repository.
+    Add {
+        /// Local directory, Git URL, or GitHub owner/repo.
+        source: String,
+        /// Pack directory within the source repository.
+        #[arg(long)]
+        dir: Option<PathBuf>,
     },
 }
 
@@ -79,6 +98,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
             stdout,
         } => cmd_scaffold(&tree, pack, output, force, stdout, &root, &cfg),
         Command::Packs => Ok(cmd_packs(&root)),
+        Command::Pack { command } => match command {
+            PackCommand::Add { source, dir } => cmd_pack_add(&source, dir.as_deref(), &root),
+        },
         Command::Init { skill } => cmd_init(&root, skill),
     }
 }
@@ -450,6 +472,21 @@ fn cmd_packs(root: &Path) -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+fn cmd_pack_add(source: &str, dir: Option<&Path>, root: &Path) -> Result<ExitCode> {
+    let added = pack_add::add(source, dir, root)?;
+    println!(
+        "added {} v{} to {}",
+        added.name,
+        added.version,
+        added.path.display()
+    );
+    println!(
+        "activate it by adding {:?} to [project].packs in btt.toml",
+        added.name
+    );
+    Ok(ExitCode::SUCCESS)
 }
 
 const DEFAULT_CONFIG: &str = r#"# btt — branch tree testing (https://github.com/Maddiaa0/btt)

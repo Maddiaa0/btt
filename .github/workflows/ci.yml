@@ -30,6 +30,8 @@ jobs:
         run: cargo test --locked
       - name: Clippy (pedantic, no warnings)
         run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Package crate
+        run: cargo package --locked
       - name: BTT self-check
         run: cargo run --locked -- check
       - name: Fetch pinned wasm grammars

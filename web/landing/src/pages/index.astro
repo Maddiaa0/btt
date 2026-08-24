@@ -7,7 +7,7 @@ import "@fontsource/newsreader/latin-300-italic.css";
 import "../styles/global.css";
 
 const repositoryUrl = "https://github.com/Maddiaa0/btt";
-const installCommand = `cargo install --git ${repositoryUrl}`;
+const installCommand = `curl -LsSf ${repositoryUrl}/releases/latest/download/btt-cli-installer.sh | sh`;
 const description =
   "btt scaffolds tests from branching .tree specs and checks that code and specification stay in sync.";
 const checkerTree = `checker

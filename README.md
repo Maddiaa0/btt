@@ -83,10 +83,36 @@ $ btt check
 - **The spec can't rot.** `btt check` fails CI the moment tests and tree
   diverge, so trees stay a truthful map instead of stale documentation.
 
+## Install
+
+macOS and Linux:
+
+```console
+$ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/Maddiaa0/btt/releases/latest/download/btt-cli-installer.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/Maddiaa0/btt/releases/latest/download/btt-cli-installer.ps1 | iex"
+```
+
+Package managers:
+
+```console
+$ brew install Maddiaa0/tap/btt
+$ npm install --global @maddiaa0/btt
+$ cargo install btt-cli --locked
+```
+
+The Cargo package is named `btt-cli` because `btt` was already taken on
+crates.io. Every installation method provides the same `btt` command.
+Prebuilt releases include WASM grammar support; source installs can opt in with
+`cargo install btt-cli --locked --features wasm`.
+
 ## Quickstart
 
 ```console
-$ cargo install --path .        # puts btt on your PATH
 $ cd your-project
 $ btt init                      # writes btt.toml (--skill: agent skill too)
 $ $EDITOR src/map.tree          # write the spec

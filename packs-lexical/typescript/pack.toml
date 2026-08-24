@@ -3,10 +3,15 @@
 # tests/lexical.rs, which differentially fuzzes it against the native
 # tree-sitter extraction.
 
+format = 1
+
 [pack]
 name = "typescript-lexical"
-version = "0.1.0"
+version = "0.2.0"
 description = "TypeScript/JavaScript tests via lexical scanning (no grammar): describe blocks for branches, it/test for leaves"
+
+[compat]
+btt = ">=0.2.0"
 
 [detect]
 targets = [

@@ -209,4 +209,24 @@ mod when_a_builtin_pack_has_a_wasm_twin {
             }
         }
     }
+
+    #[test]
+    fn keeps_release_metadata_identical() {
+        for name in ["rust", "typescript"] {
+            let native = pack::load_dir(&repo_root().join("packs").join(name)).unwrap();
+            let wasm = pack::load_dir(&repo_root().join("packs-wasm").join(name)).unwrap();
+            assert_eq!(
+                native.manifest.pack.version, wasm.manifest.pack.version,
+                "packs-wasm/{name} has a different release version"
+            );
+            assert_eq!(
+                native.manifest.format, wasm.manifest.format,
+                "packs-wasm/{name} has a different manifest format"
+            );
+            assert_eq!(
+                native.manifest.compat.btt, wasm.manifest.compat.btt,
+                "packs-wasm/{name} has different btt compatibility"
+            );
+        }
+    }
 }

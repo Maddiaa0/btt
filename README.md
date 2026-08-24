@@ -131,6 +131,11 @@ Want to add your language? The step-by-step authoring guide —
 unsupported test convention to a working, verified pack, and documents
 every manifest field, query capture, and template input along the way.
 
+Packs carry independent `SemVer` versions, a manifest-format version, and a
+`btt` compatibility requirement. Releases use immutable per-pack tags; the
+policy and maintainer workflow are documented in
+[docs/pack-releases.md](docs/pack-releases.md).
+
 ## Configuration
 
 `btt.toml` at the repo root:

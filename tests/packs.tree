@@ -13,4 +13,5 @@ language packs
 ├── when a scaffolded file is checked
 │   └── it reports no findings for hostile titles
 └── when a builtin pack has a wasm twin
-    └── it keeps queries and templates identical
+    ├── it keeps queries and templates identical
+    └── it keeps release metadata identical

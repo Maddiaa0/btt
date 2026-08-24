@@ -1,7 +1,12 @@
+format = 1
+
 [pack]
 name = "typescript-wasm"
-version = "0.1.0"
+version = "0.2.0"
 description = "TypeScript/JavaScript tests: describe blocks for branches, it/test for leaves (vitest, jest, bun)"
+
+[compat]
+btt = ">=0.2.0"
 
 [detect]
 # No tsx target: this pack ships only the plain TypeScript grammar. TSX is a

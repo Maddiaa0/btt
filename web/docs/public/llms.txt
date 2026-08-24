@@ -1,0 +1,22 @@
+# btt documentation
+
+> Branch tree testing for any language: specify test structure in readable .tree files, scaffold the test skeleton, and keep code and specification in sync.
+
+These are the canonical machine-readable entry points for btt. Fetch individual Markdown pages for focused context or the complete file for one-shot ingestion.
+
+## Documentation
+
+- [Overview](https://docs.btt.maddiaa.com/overview.md): What branch tree testing is, how btt works, and why a small test outline is useful when people or agents write code.
+- [Getting started](https://docs.btt.maddiaa.com/getting-started.md): Add btt to a project, write one tree, scaffold the tests, and check the result.
+- [Installation](https://docs.btt.maddiaa.com/installation.md): Install btt with Cargo and set up a project.
+- [Creating an extension](https://docs.btt.maddiaa.com/creating-an-extension.md): Add support for another language or test framework by writing a pack.
+- [Installing the skill + usage](https://docs.btt.maddiaa.com/installing-the-skill.md): Give Claude Code, Codex, or another coding agent the project's tree-first test rules.
+
+## Complete documentation
+
+- [All btt documentation](https://docs.btt.maddiaa.com/llms-full.txt): Every page concatenated as Markdown.
+
+## Project
+
+- [GitHub repository](https://github.com/Maddiaa0/btt): Source, examples, built-in packs, and issue tracking.
+- [Human documentation](https://docs.btt.maddiaa.com/): Rendered documentation with search and navigation.

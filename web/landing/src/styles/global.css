@@ -188,21 +188,22 @@ button:focus-visible {
   width: min(620px, 94vw);
   margin: clamp(16px, 2.5vh, 26px) 0 0;
   overflow: hidden;
-  border: 1px solid #dedbd1;
-  border-radius: 8px;
-  background: rgb(246 244 237 / 72%);
+  border: 0;
+  border-block: 1px solid #e6e2d6;
+  border-radius: 0;
+  background: transparent;
   color: #6d675c;
   cursor: pointer;
-  font-family: "IBM Plex Sans", sans-serif;
+  font-family: "IBM Plex Mono", monospace;
   animation: rise-in 1.6s 0.7s both;
 }
 
 .agent-prompt-header {
   display: flex;
-  min-height: 48px;
+  min-height: 42px;
   align-items: center;
   justify-content: space-between;
-  padding: 0 8px;
+  padding: 0 2px;
   border-bottom: 1px solid transparent;
   transition:
     background-color 150ms ease,
@@ -210,17 +211,17 @@ button:focus-visible {
 }
 
 .agent-prompt:hover .agent-prompt-header {
-  background: rgb(238 235 225 / 75%);
+  background: rgb(230 226 214 / 24%);
 }
 
 .agent-prompt[data-expanded="true"] .agent-prompt-header {
-  border-bottom-color: #dedbd1;
+  border-bottom-color: #e6e2d6;
 }
 
 .agent-prompt-copy {
   display: flex;
   min-width: 0;
-  height: 46px;
+  height: 40px;
   flex: 1;
   gap: 8px;
   align-items: center;
@@ -229,7 +230,8 @@ button:focus-visible {
   background: transparent;
   color: #6d675c;
   cursor: pointer;
-  font: 400 13px/1 "IBM Plex Sans", sans-serif;
+  font: 400 clamp(10px, 1.4vh, 12px) / 1 "IBM Plex Mono", monospace;
+  letter-spacing: 0.02em;
   text-align: left;
   transition: color 100ms ease;
 }
@@ -240,10 +242,10 @@ button:focus-visible {
 }
 
 .agent-prompt-sparkle {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
   flex: 0 0 auto;
-  fill: #8c7750;
+  fill: #a5a093;
   transition: fill 100ms ease;
 }
 
@@ -264,12 +266,12 @@ button:focus-visible {
 
 .agent-prompt-action {
   display: inline-flex;
-  height: 32px;
+  height: 30px;
   align-items: center;
   justify-content: center;
-  padding: 0 7px;
+  padding: 0 6px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 2px;
   background: transparent;
   color: #8d877c;
   cursor: pointer;
@@ -283,13 +285,18 @@ button:focus-visible {
 }
 
 .agent-prompt-action:hover {
-  background: #e9e5da;
+  background: transparent;
   color: #1c1a16;
   text-decoration: none;
 }
 
+.agent-chat-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .agent-prompt-toggle {
-  width: 32px;
+  width: 30px;
   padding: 0;
 }
 
@@ -310,7 +317,7 @@ button:focus-visible {
 .agent-prompt-content {
   position: relative;
   overflow: hidden;
-  background: #f4f1e9;
+  background: rgb(230 226 214 / 18%);
 }
 
 .agent-prompt-content::after {
@@ -333,11 +340,11 @@ button:focus-visible {
 
 .agent-prompt-content pre {
   margin: 0;
-  padding: 18px 20px;
+  padding: 14px 10px;
   color: #4a463e;
-  font-family: "IBM Plex Sans", sans-serif;
-  font-size: 13px;
-  line-height: 1.65;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: clamp(9px, 1.3vh, 11px);
+  line-height: 1.6;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
@@ -347,24 +354,20 @@ button:focus-visible {
 }
 
 .agent-prompt-content a {
-  color: #78623b;
+  color: #6d675c;
   text-decoration: underline;
   text-decoration-color: rgb(120 98 59 / 35%);
   text-underline-offset: 2px;
 }
 
 .agent-prompt-content a:hover {
-  color: #4f3c1f;
-  text-decoration-color: #4f3c1f;
+  color: #1c1a16;
+  text-decoration-color: #1c1a16;
 }
 
 .agent-prompt-content span {
-  padding: 1px 4px;
-  border-radius: 3px;
-  background: #e7e2d6;
-  color: #1c1a16;
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 0.92em;
+  color: inherit;
+  font: inherit;
 }
 
 @keyframes prompt-shimmer {

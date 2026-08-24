@@ -8,6 +8,9 @@ import "../styles/global.css";
 
 const repositoryUrl = "https://github.com/Maddiaa0/btt";
 const installCommand = `cargo install --git ${repositoryUrl}`;
+const agentSetupUrl = `${repositoryUrl}/blob/main/AGENT-SETUP.md`;
+const agentInstructions = `Read ${agentSetupUrl} and set up btt for my project.`;
+const encodedAgentInstructions = encodeURIComponent(agentInstructions);
 const description =
   "btt scaffolds tests from branching .tree specs and checks that code and specification stay in sync.";
 const checkerTree = `checker
@@ -88,6 +91,74 @@ const productionMetaCsp =
             <pre><code>{checkerTree}</code></pre>
           </figure>
         </div>
+
+        <figure
+          class="agent-prompt"
+          id="agent-prompt"
+          data-expanded="false"
+          data-instructions={agentInstructions}
+          data-state="idle"
+        >
+          <figcaption class="agent-prompt-header">
+            <button
+              class="agent-prompt-copy"
+              id="copy-agent"
+              type="button"
+              aria-label="Copy instructions for agent"
+            >
+              <svg
+                class="agent-prompt-sparkle"
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+              >
+                <path d="M12 2.8c.5 5.4 3.1 8 8.4 8.5-5.3.5-7.9 3.1-8.4 8.5-.5-5.4-3.1-8-8.4-8.5 5.3-.5 7.9-3.1 8.4-8.5Z"></path>
+              </svg>
+              <span class="agent-prompt-label" aria-live="polite"
+                >Copy instructions for agent</span
+              >
+            </button>
+
+            <span class="agent-prompt-actions">
+              <a
+                class="agent-prompt-action agent-chat-link"
+                href={`https://chatgpt.com?hints=search&q=${encodedAgentInstructions}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Open in ChatGPT"
+                title="Open in ChatGPT"
+              >
+                <span aria-hidden="true">gpt</span>
+              </a>
+              <a
+                class="agent-prompt-action agent-chat-link"
+                href={`https://claude.ai/new?q=${encodedAgentInstructions}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Open in Claude"
+                title="Open in Claude"
+              >
+                <span aria-hidden="true">claude</span>
+              </a>
+              <button
+                class="agent-prompt-action agent-prompt-toggle"
+                id="toggle-agent-prompt"
+                type="button"
+                aria-controls="agent-prompt-content"
+                aria-expanded="false"
+                aria-label="View prompt"
+                title="View prompt"
+              >
+                <svg aria-hidden="true" viewBox="0 0 24 24">
+                  <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3M8 9h8M8 12h8M8 15h5"></path>
+                </svg>
+              </button>
+            </span>
+          </figcaption>
+
+          <div class="agent-prompt-content" id="agent-prompt-content" hidden>
+            <pre><code>Read <a href={agentSetupUrl}>{agentSetupUrl}</a> and set up <span>btt</span> for my project.</code></pre>
+          </div>
+        </figure>
       </section>
     </main>
 

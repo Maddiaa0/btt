@@ -392,5 +392,81 @@ function initialiseCopyButton() {
   });
 }
 
+function initialiseAgentPrompt() {
+  const frame = document.querySelector<HTMLElement>("#agent-prompt");
+  const copyButton = document.querySelector<HTMLButtonElement>("#copy-agent");
+  const copyLabel = frame?.querySelector<HTMLElement>(".agent-prompt-label");
+  const toggle = document.querySelector<HTMLButtonElement>("#toggle-agent-prompt");
+  const content = document.querySelector<HTMLElement>("#agent-prompt-content");
+  if (!frame || !copyButton || !copyLabel || !toggle || !content) return;
+
+  let feedbackTimeout = 0;
+
+  const showFeedback = (state: "copied" | "error", label: string) => {
+    window.clearTimeout(feedbackTimeout);
+    frame.dataset.state = state;
+    copyButton.setAttribute("aria-label", label);
+    copyLabel.textContent = label;
+
+    feedbackTimeout = window.setTimeout(() => {
+      frame.dataset.state = "idle";
+      copyButton.setAttribute("aria-label", "Copy instructions for agent");
+      copyLabel.textContent = "Copy instructions for agent";
+    }, 2000);
+  };
+
+  const copyInstructions = async () => {
+    const instructions = frame.dataset.instructions;
+    if (!instructions) return;
+
+    try {
+      if (!navigator.clipboard) throw new Error("clipboard unavailable");
+      await navigator.clipboard.writeText(instructions);
+      showFeedback("copied", "Copied instructions");
+    } catch {
+      const selection = window.getSelection();
+      if (selection) {
+        frame.dataset.expanded = "true";
+        toggle.setAttribute("aria-expanded", "true");
+        toggle.setAttribute("aria-label", "Hide prompt");
+        toggle.setAttribute("title", "Hide prompt");
+        content.hidden = false;
+        const range = document.createRange();
+        range.selectNodeContents(content);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+      showFeedback("error", "Copy unavailable — instructions selected");
+    }
+  };
+
+  copyButton.addEventListener("click", () => void copyInstructions());
+
+  frame.addEventListener("click", (event) => {
+    if (event.defaultPrevented) return;
+    if (event.target instanceof Element && event.target.closest("a, button")) return;
+    if (window.getSelection()?.isCollapsed === false) return;
+    void copyInstructions();
+  });
+
+  toggle.addEventListener("click", () => {
+    const expanded = toggle.getAttribute("aria-expanded") !== "true";
+    frame.dataset.expanded = String(expanded);
+    toggle.setAttribute("aria-expanded", String(expanded));
+    toggle.setAttribute("aria-label", expanded ? "Hide prompt" : "View prompt");
+    toggle.setAttribute("title", expanded ? "Hide prompt" : "View prompt");
+    content.hidden = !expanded;
+  });
+
+  window.addEventListener(
+    "pagehide",
+    () => {
+      window.clearTimeout(feedbackTimeout);
+    },
+    { once: true },
+  );
+}
+
 drawForest();
 initialiseCopyButton();
+initialiseAgentPrompt();

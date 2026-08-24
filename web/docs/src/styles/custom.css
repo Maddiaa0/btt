@@ -182,6 +182,107 @@ h1 {
   background: #f3f1eb;
 }
 
+.architecture-diagram {
+  margin-block: 1.75rem;
+  padding: clamp(1rem, 3vw, 1.5rem);
+  border: 1px solid #dedbd2;
+  border-radius: 0.72rem;
+  background: #f6f4ee;
+}
+
+.architecture-label {
+  margin: 0 0 0.65rem;
+  color: #6d675c;
+  font-family: var(--sl-font-mono);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.architecture-inputs,
+.architecture-outputs {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.architecture-inputs {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.architecture-outputs {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.architecture-card {
+  min-width: 0;
+  padding: 0.9rem 1rem;
+  border: 1px solid #dedbd2;
+  border-radius: 0.5rem;
+  background: #faf9f5;
+}
+
+.architecture-card code {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #1c1a16;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.architecture-card span {
+  display: block;
+  margin-top: 0.4rem;
+  color: #6d675c;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.architecture-arrow {
+  height: 2.25rem;
+  color: #a5a093;
+  font-family: var(--sl-font-mono);
+  font-size: 1rem;
+  line-height: 2.25rem;
+  text-align: center;
+}
+
+.architecture-core {
+  max-width: 29rem;
+  margin-inline: auto;
+  padding: 1rem 1.15rem;
+  border-radius: 0.5rem;
+  background: #1c1a16;
+  color: #faf9f5;
+  text-align: center;
+}
+
+.architecture-core > span {
+  display: block;
+  color: #a5a093;
+  font-family: var(--sl-font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.architecture-core strong {
+  display: block;
+  margin-top: 0.15rem;
+  font-family: var(--sl-font-mono);
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+.architecture-core p {
+  margin: 0.5rem auto 0;
+  color: #dedbd2;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
 .sl-markdown-content table {
   display: table;
   width: 100%;
@@ -239,6 +340,11 @@ footer {
 }
 
 @media (max-width: 50rem) {
+  .architecture-inputs,
+  .architecture-outputs {
+    grid-template-columns: 1fr;
+  }
+
   .sl-markdown-content table {
     display: block;
     overflow-x: auto;

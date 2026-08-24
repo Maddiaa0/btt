@@ -55,6 +55,18 @@ function parsePage(raw, source) {
 
 function normalizeMarkdown(markdown) {
   return markdown
+    .replace(
+      /<!-- architecture:start -->[\s\S]*?<!-- architecture:end -->/,
+      `**Architecture at a glance**
+
+Inputs:
+
+- \`.tree files\`: the tests that should exist
+- \`btt.toml\`: active packs and check levels
+- Language pack: file routing, name mapping, source extraction, and scaffold templates
+
+The btt core parses the tree, finds the test file, and builds the expected test structure. \`btt scaffold\` renders a test skeleton; \`btt check\` compares the test code and reports differences.`,
+    )
     .replace(/^```([\w-]+) title="[^"]+"$/gm, "```$1")
     .replace(/^:::(?:tip|note|caution|danger)(?:\[([^\]]+)\])?\n([\s\S]*?)\n:::$/gm, (_, title, body) => {
       const lines = body.split("\n").map((line) => `> ${line}`);
@@ -118,4 +130,3 @@ ${rendered.map((page) => `${page.markdown}\n\nSource page: ${site}${page.path}`)
 
 await emit("llms.txt", index);
 await emit("llms-full.txt", full);
-

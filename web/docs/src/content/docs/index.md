@@ -62,18 +62,43 @@ This does not make the agent's work correct by itself. It simply lets you check 
 
 btt is a Rust CLI. Its core handles tree parsing, file discovery, scaffolding, comparison, and reporting. Language packs describe the source code around it.
 
-```text
- btt.toml
-    │ chooses packs and warning levels
-    ▼
- .tree file ──► tree parser ──► expected tests
-                                      │
- language pack                       │
- ├── finds the target file           │
- ├── maps names                      │
- ├── reads test structure ───────────┼──► compare ──► report
- └── renders a skeleton ─────────────┘
-```
+<!-- architecture:start -->
+<div class="architecture-diagram" role="group" aria-label="btt architecture">
+  <p class="architecture-label">Inputs</p>
+  <div class="architecture-inputs">
+    <div class="architecture-card">
+      <code>.tree files</code>
+      <span>The tests that should exist</span>
+    </div>
+    <div class="architecture-card">
+      <code>btt.toml</code>
+      <span>Active packs and check levels</span>
+    </div>
+    <div class="architecture-card">
+      <code>language pack</code>
+      <span>Routing, names, extraction, and templates</span>
+    </div>
+  </div>
+  <div class="architecture-arrow" aria-hidden="true">↓</div>
+  <div class="architecture-core">
+    <span>Core</span>
+    <strong>btt</strong>
+    <p>Parses the tree, finds the test file, and builds the expected test structure.</p>
+  </div>
+  <div class="architecture-arrow" aria-hidden="true">↓</div>
+  <p class="architecture-label">Commands</p>
+  <div class="architecture-outputs">
+    <div class="architecture-card">
+      <code>btt scaffold</code>
+      <span>Renders a test skeleton</span>
+    </div>
+    <div class="architecture-card">
+      <code>btt check</code>
+      <span>Compares the tests and reports differences</span>
+    </div>
+  </div>
+</div>
+<!-- architecture:end -->
 
 A pack contains four main pieces:
 

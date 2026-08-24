@@ -61,18 +61,15 @@ This does not make the agent's work correct by itself. It simply lets you check 
 
 btt is a Rust CLI. Its core handles tree parsing, file discovery, scaffolding, comparison, and reporting. Language packs describe the source code around it.
 
-```text
- btt.toml
-    │ chooses packs and warning levels
-    ▼
- .tree file ──► tree parser ──► expected tests
-                                      │
- language pack                       │
- ├── finds the target file           │
- ├── maps names                      │
- ├── reads test structure ───────────┼──► compare ──► report
- └── renders a skeleton ─────────────┘
-```
+**Architecture at a glance**
+
+Inputs:
+
+- `.tree files`: the tests that should exist
+- `btt.toml`: active packs and check levels
+- Language pack: file routing, name mapping, source extraction, and scaffold templates
+
+The btt core parses the tree, finds the test file, and builds the expected test structure. `btt scaffold` renders a test skeleton; `btt check` compares the test code and reports differences.
 
 A pack contains four main pieces:
 

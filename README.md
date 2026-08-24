@@ -126,6 +126,11 @@ speaks your language without a rebuild. Packs come in three kinds:
   It fails closed on anything it can't fully account for; when a language
   outgrows it, graduate to a WASM pack.
 
+Want to add your language? The step-by-step authoring guide —
+[docs/extension-packs.md](docs/extension-packs.md) — walks from an
+unsupported test convention to a working, verified pack, and documents
+every manifest field, query capture, and template input along the way.
+
 ## Configuration
 
 `btt.toml` at the repo root:

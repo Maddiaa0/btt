@@ -3,7 +3,6 @@
 
 use anyhow::{Context, Result, bail, ensure};
 use btt::pack::{self, GrammarSource};
-use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -18,8 +17,15 @@ pub(crate) struct AddedPack {
 }
 
 /// Add exactly one pack from a local directory or Git repository.
-pub(crate) fn add(source: &str, subdir: Option<&Path>, project_root: &Path) -> Result<AddedPack> {
-    let acquired = acquire(source)?;
+/// `force_git` skips the local-path interpretation of `source`, so a
+/// stray directory named like a GitHub shorthand cannot shadow the repo.
+pub(crate) fn add(
+    source: &str,
+    subdir: Option<&Path>,
+    project_root: &Path,
+    force_git: bool,
+) -> Result<AddedPack> {
+    let acquired = acquire(source, force_git)?;
     let source_root = acquired
         .root
         .canonicalize()
@@ -29,9 +35,10 @@ pub(crate) fn add(source: &str, subdir: Option<&Path>, project_root: &Path) -> R
     // Loading first gives us the manifest closure. Loading the staged copy
     // below remains authoritative for the exact bytes that will be used.
     let source_pack = pack::load_dir(&pack_dir).context("validating source pack")?;
+    ensure_wasm_grammar_present(&source_pack)?;
     let name = source_pack.name().to_string();
     ensure!(
-        is_safe_pack_name(&name),
+        pack::is_safe_name(&name),
         "pack name `{name}` must be one non-hidden path component"
     );
 
@@ -63,10 +70,11 @@ pub(crate) fn add(source: &str, subdir: Option<&Path>, project_root: &Path) -> R
     );
     let target = packs_root.join(&name);
     ensure_missing(&target)?;
+    sweep_stale_staging(&btt_dir);
 
     let staging = create_unique_dir(&btt_dir, &format!(".pack-add-{name}"))?;
     let staging_guard = DirGuard(Some(staging.clone()));
-    for rel in manifest_closure(&source_pack) {
+    for rel in source_pack.manifest.referenced_files() {
         copy_regular_file(&pack_dir, &rel, &staging)?;
     }
 
@@ -75,7 +83,10 @@ pub(crate) fn add(source: &str, subdir: Option<&Path>, project_root: &Path) -> R
         staged_pack.name() == name,
         "pack name changed while it was being copied"
     );
-    let version = staged_pack.manifest.pack.version.clone();
+    // The staged manifest bytes were re-read from disk, so its file set is
+    // authoritative too — a wasm grammar it declares must have been copied.
+    ensure_wasm_grammar_present(&staged_pack)?;
+    let version = staged_pack.manifest.pack.version.to_string();
     ensure_missing(&target)?;
     std::fs::rename(&staging, &target)
         .with_context(|| format!("moving validated pack into {}", target.as_path().display()))?;
@@ -103,8 +114,13 @@ fn select_pack_dir(source_root: &Path, subdir: Option<&Path>) -> Result<PathBuf>
         .canonicalize()
         .with_context(|| format!("resolving pack directory {}", candidate.display()))?;
     ensure!(
-        candidate.starts_with(source_root) && candidate.is_dir(),
+        candidate.starts_with(source_root),
         "pack directory {} is outside the source",
+        candidate.display()
+    );
+    ensure!(
+        candidate.is_dir(),
+        "pack directory {} is not a directory",
         candidate.display()
     );
     Ok(candidate)
@@ -117,25 +133,52 @@ fn is_confined_relative_path(path: &Path) -> bool {
         && !path.to_string_lossy().contains('\\')
 }
 
-fn is_safe_pack_name(name: &str) -> bool {
-    !name.starts_with('.')
-        && !name.contains(['/', '\\'])
-        && matches!(
-            Path::new(name).components().collect::<Vec<_>>().as_slice(),
-            [Component::Normal(_)]
-        )
+/// The loader tolerates a missing wasm grammar file (`wasm_grammar: None`,
+/// deferred to parse time), so installation must check presence itself:
+/// on the source pack for a clear diagnostic, and on the staged copy to
+/// guarantee the vendored pack is complete even if the source manifest
+/// changed between the closure computation and the copy.
+fn ensure_wasm_grammar_present(pack: &pack::Pack) -> Result<()> {
+    if let GrammarSource::Wasm(file) = &pack.manifest.grammar.source {
+        ensure!(
+            pack.wasm_grammar.is_some(),
+            "pack `{}` declares grammar `wasm:{}` but the file is missing or unreadable",
+            pack.name(),
+            file.display()
+        );
+    }
+    Ok(())
 }
 
-fn manifest_closure(pack: &pack::Pack) -> BTreeSet<PathBuf> {
-    let mut files = BTreeSet::from([PathBuf::from("pack.toml")]);
-    if let Some(query) = &pack.manifest.extract.query {
-        files.insert(PathBuf::from(query));
+/// Remove staging directories orphaned by interrupted runs: cleanup is
+/// otherwise Drop-based, which a kill signal skips, and the unique names
+/// mean no later run would ever reuse the leftovers.
+fn sweep_stale_staging(btt_dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(btt_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if name.starts_with(".pack-add-") && staging_pid(name).is_some_and(is_dead) {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
     }
-    files.insert(PathBuf::from(&pack.manifest.scaffold.template));
-    if let GrammarSource::Wasm(grammar) = &pack.manifest.grammar.source {
-        files.insert(grammar.clone());
-    }
-    files
+}
+
+/// The pid embedded in a `.pack-add-<name>-<pid>-<seq>` directory name.
+fn staging_pid(name: &str) -> Option<u32> {
+    let mut parts = name.rsplitn(3, '-');
+    let _sequence = parts.next()?;
+    parts.next()?.parse().ok()
+}
+
+/// Liveness is only checkable via procfs; elsewhere stale directories are
+/// left alone rather than risking a concurrent run's live staging.
+fn is_dead(pid: u32) -> bool {
+    pid != std::process::id()
+        && Path::new("/proc").is_dir()
+        && !Path::new(&format!("/proc/{pid}")).exists()
 }
 
 fn copy_regular_file(source: &Path, rel: &Path, destination: &Path) -> Result<()> {
@@ -186,9 +229,9 @@ struct Acquired {
     _cleanup: Option<DirGuard>,
 }
 
-fn acquire(source: &str) -> Result<Acquired> {
+fn acquire(source: &str, force_git: bool) -> Result<Acquired> {
     let local = Path::new(source);
-    if local.exists() {
+    if !force_git && local.exists() {
         return Ok(Acquired {
             root: local.to_path_buf(),
             _cleanup: None,
@@ -201,6 +244,10 @@ fn acquire(source: &str) -> Result<Acquired> {
     let cleanup = DirGuard(Some(holder));
     let output = Command::new("git")
         .env("GIT_ALLOW_PROTOCOL", "https:ssh:git:file")
+        // Fail fast instead of prompting for credentials on the tty (which
+        // a typo'd shorthand triggers: GitHub answers unknown repos with an
+        // auth challenge); the captured stderr is relayed below.
+        .env("GIT_TERMINAL_PROMPT", "0")
         .arg("clone")
         .arg("--depth")
         .arg("1")
@@ -233,7 +280,8 @@ fn parse_git_source(source: &str) -> Result<String> {
     let parts: Vec<_> = source.split('/').collect();
     let github_shorthand = matches!(parts.as_slice(), [owner, repo] if is_repo_component(owner) && is_repo_component(repo));
     if github_shorthand {
-        return Ok(format!("https://github.com/{source}.git"));
+        let repo = source.strip_suffix(".git").unwrap_or(source);
+        return Ok(format!("https://github.com/{repo}.git"));
     }
     bail!("source `{source}` does not exist; use a local directory, Git URL, or GitHub owner/repo")
 }
@@ -306,10 +354,15 @@ mod tests {
         std::fs::create_dir_all(dir.join("queries")).unwrap();
         std::fs::create_dir_all(dir.join("templates")).unwrap();
         let manifest = format!(
-            r#"[pack]
+            r#"format = 1
+
+[pack]
 name = "{name}"
 version = "1.2.3"
 description = "test pack"
+
+[compat]
+btt = ">=0.2.0"
 
 [detect]
 targets = ["{{stem}}.rs"]
@@ -353,7 +406,7 @@ output = "{{stem}}.rs"
             write_pack(&source, "demo");
             std::fs::write(source.join("ignored.txt"), "not part of the pack").unwrap();
 
-            let added = add(source.to_str().unwrap(), None, &project).unwrap();
+            let added = add(source.to_str().unwrap(), None, &project, false).unwrap();
 
             assert_eq!(added.name, "demo");
             assert_eq!(added.version, "1.2.3");
@@ -369,16 +422,32 @@ output = "{{stem}}.rs"
             let source = temp.path().join("source");
             let project = temp.path().join("project");
             write_pack(&source, "demo");
-            let first = add(source.to_str().unwrap(), None, &project).unwrap();
+            let first = add(source.to_str().unwrap(), None, &project, false).unwrap();
             std::fs::write(source.join("queries/tests.scm"), "changed").unwrap();
 
-            let error = add(source.to_str().unwrap(), None, &project).unwrap_err();
+            let error = add(source.to_str().unwrap(), None, &project, false).unwrap_err();
 
             assert!(error.to_string().contains("already exists"), "{error:#}");
             assert_eq!(
                 std::fs::read_to_string(first.path.join("queries/tests.scm")).unwrap(),
                 "(function_item) @test"
             );
+        }
+
+        #[test]
+        fn sweeps_staging_left_by_interrupted_runs() {
+            let temp = TestDir::new("btt-add-sweep");
+            let source = temp.path().join("source");
+            let project = temp.path().join("project");
+            write_pack(&source, "demo");
+            // u32::MAX cannot be a live pid (Linux pid_max is far smaller).
+            let stale = project.join(".btt/.pack-add-old-4294967295-0");
+            std::fs::create_dir_all(&stale).unwrap();
+            std::fs::write(stale.join("leftover"), "").unwrap();
+
+            add(source.to_str().unwrap(), None, &project, false).unwrap();
+
+            assert!(!stale.exists());
         }
     }
 
@@ -392,10 +461,34 @@ output = "{{stem}}.rs"
             let project = temp.path().join("project");
             write_pack(&source, "../escape");
 
-            let error = add(source.to_str().unwrap(), None, &project).unwrap_err();
+            let error = add(source.to_str().unwrap(), None, &project, false).unwrap_err();
 
             assert!(error.to_string().contains("one non-hidden"), "{error:#}");
             assert!(!project.join(".btt/escape").exists());
+        }
+    }
+
+    mod when_the_source_declares_a_wasm_grammar {
+        use super::*;
+
+        #[test]
+        fn refuses_a_pack_whose_grammar_file_is_missing() {
+            let temp = TestDir::new("btt-add-wasm-missing");
+            let source = temp.path().join("source");
+            let project = temp.path().join("project");
+            write_pack(&source, "demo");
+            let manifest = std::fs::read_to_string(source.join("pack.toml"))
+                .unwrap()
+                .replace("builtin:rust", "wasm:grammar.wasm");
+            std::fs::write(source.join("pack.toml"), manifest).unwrap();
+
+            let error = add(source.to_str().unwrap(), None, &project, false).unwrap_err();
+
+            assert!(
+                error.to_string().contains("missing or unreadable"),
+                "{error:#}"
+            );
+            assert!(!project.join(".btt/packs/demo").exists());
         }
     }
 
@@ -413,6 +506,7 @@ output = "{{stem}}.rs"
                 source.to_str().unwrap(),
                 Some(Path::new("../outside")),
                 &project,
+                false,
             )
             .unwrap_err();
 
@@ -436,7 +530,7 @@ output = "{{stem}}.rs"
             std::fs::create_dir_all(&outside).unwrap();
             symlink(&outside, project.join(".btt/packs")).unwrap();
 
-            let error = add(source.to_str().unwrap(), None, &project).unwrap_err();
+            let error = add(source.to_str().unwrap(), None, &project, false).unwrap_err();
 
             assert!(
                 error.to_string().contains("outside the project"),
@@ -463,10 +557,23 @@ output = "{{stem}}.rs"
             run_git(&source, &["commit", "--quiet", "-m", "fixture"]);
             let url = format!("file://{}", source.display());
 
-            let added = add(&url, None, &project).unwrap();
+            let added = add(&url, None, &project, false).unwrap();
 
             assert_eq!(added.name, "from-git");
             assert!(added.path.join("pack.toml").is_file());
+        }
+
+        #[test]
+        fn refuses_a_local_path_when_git_is_forced() {
+            let temp = TestDir::new("btt-add-force-git");
+            let source = temp.path().join("source");
+            let project = temp.path().join("project");
+            write_pack(&source, "demo");
+
+            let error = add(source.to_str().unwrap(), None, &project, true).unwrap_err();
+
+            assert!(error.to_string().contains("does not exist"), "{error:#}");
+            assert!(!project.join(".btt/packs/demo").exists());
         }
     }
 
@@ -477,6 +584,14 @@ output = "{{stem}}.rs"
         fn expands_a_github_shorthand() {
             assert_eq!(
                 parse_git_source("example/btt-packs").unwrap(),
+                "https://github.com/example/btt-packs.git"
+            );
+        }
+
+        #[test]
+        fn keeps_an_existing_git_suffix() {
+            assert_eq!(
+                parse_git_source("example/btt-packs.git").unwrap(),
                 "https://github.com/example/btt-packs.git"
             );
         }

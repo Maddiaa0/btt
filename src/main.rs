@@ -69,6 +69,9 @@ enum PackCommand {
         /// Pack directory within the source repository.
         #[arg(long)]
         dir: Option<PathBuf>,
+        /// Treat the source as Git even if a matching local path exists.
+        #[arg(long)]
+        git: bool,
     },
 }
 
@@ -99,7 +102,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
         } => cmd_scaffold(&tree, pack, output, force, stdout, &root, &cfg),
         Command::Packs => Ok(cmd_packs(&root)),
         Command::Pack { command } => match command {
-            PackCommand::Add { source, dir } => cmd_pack_add(&source, dir.as_deref(), &root),
+            PackCommand::Add { source, dir, git } => {
+                cmd_pack_add(&source, dir.as_deref(), git, &root)
+            }
         },
         Command::Init { skill } => cmd_init(&root, skill),
     }
@@ -474,8 +479,8 @@ fn cmd_packs(root: &Path) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn cmd_pack_add(source: &str, dir: Option<&Path>, root: &Path) -> Result<ExitCode> {
-    let added = pack_add::add(source, dir, root)?;
+fn cmd_pack_add(source: &str, dir: Option<&Path>, git: bool, root: &Path) -> Result<ExitCode> {
+    let added = pack_add::add(source, dir, root, git)?;
     println!(
         "added {} v{} to {}",
         added.name,

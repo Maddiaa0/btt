@@ -145,7 +145,11 @@ $ btt pack add owner/repo --dir packs/python
 
 This vendors only the files named by the pack manifest into
 `.btt/packs/<name>`; Git and your project history provide distribution,
-review, and versioning.
+review, and versioning. Only add packs from sources you trust: queries
+and lexical profiles are data, but a wasm grammar is code — the no-WASI
+sandbox removes ambient filesystem and network access, not every risk
+from a deliberately hostile module. Review what lands in `.btt/packs/`
+like any other dependency.
 
 ## Configuration
 
@@ -172,5 +176,77 @@ Missing tests are always errors, and `btt check` exits non-zero on errors.
 | `btt check [paths] [-j N]` | diff every `.tree` against its test file (parallel; `-j` caps threads) |
 | `btt scaffold <tree>` | generate a skeleton (`--stdout`, `--force`, `--pack`) |
 | `btt packs` | list packs and where they resolve from |
-| `btt pack add <source> [--dir <path>]` | vendor one local or Git-hosted pack into this project |
+| `btt pack add <source> [--dir <path>] [--git]` | vendor one local or Git-hosted pack into this project (`--git`: never treat the source as a local path) |
 | `btt init [--skill]` | write `btt.toml` (+ Claude skill for agents) |
+
+## Writing a lexical pack
+
+A pack is a folder: `pack.toml` plus a scaffold template. For a lexical
+pack the manifest is the entire language definition — this working
+Solidity (Foundry) one fits on a screen:
+
+```toml
+format = 1
+
+[pack]
+name = "solidity"
+version = "0.1.0"
+description = "Foundry tests via lexical scanning"
+
+[compat]
+btt = ">=0.2.0"
+
+[detect]
+targets = ["{stem}.t.sol"]
+
+[grammar]
+source = "lexical"
+
+[extract]
+
+[lexical]
+line_comment = "//"
+block_comment = ["/*", "*/"]
+strings = [{ delim = '"', escape = '\' }, { delim = "'", escape = '\' }]
+nest = [["(", ")"], ["{", "}"]]
+
+# Openers capture the keyword and name, and include the opening bracket
+# whose matching closer bounds the definition's span.
+[lexical.block]
+open = '''(?:^|[^\w])(?<kw>contract)\s+(?<name>\w+)[^{;]*\{'''
+
+[lexical.test]
+open = '''(?:^|[^\w])(?<kw>function)\s+(?<name>test\w*)\s*\('''
+
+[mapping]
+root = "block"          # the tree's root line is a top-level contract
+
+[mapping.block]
+case = "pascal"
+
+[mapping.test]
+strip_prefix = "it "
+add_prefix = "test_"
+case = "pascal"
+
+[scaffold]
+template = "templates/test.jinja"
+output = "{stem}.t.sol"
+```
+
+With this pack active, a `map.tree` rooted at `MapTest` with the leaf
+"it returns the value" checks against
+`contract MapTest { function test_ReturnsTheValue() ... }` in
+`map.t.sol`. The in-repo packs are the reference examples:
+`packs-lexical/rust` and `packs-lexical/typescript` (lexical),
+`packs-wasm/` (WASM), `packs/` (builtin).
+
+## Limitations
+
+Lexical packs see comments, strings, and brackets — not grammar.
+Languages whose structure isn't bracket-shaped are out of their scope:
+Python's indentation nesting, Ruby's `do…end`, and syntax that hides
+brackets from a scanner (JS regex literals, template-string
+interpolation). Extraction fails closed — a file the profile can't fully
+account for is reported, never silently mis-read — and a language that
+outgrows its profile graduates to a WASM grammar pack.

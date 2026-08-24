@@ -43,7 +43,7 @@ use crate::mapping::Mapping;
 use include_dir::{Dir, include_dir};
 use semver::{Version, VersionReq};
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
 
@@ -259,6 +259,25 @@ struct ManifestHeader {
 #[derive(Deserialize)]
 struct ManifestPackHeader {
     name: String,
+}
+
+impl Manifest {
+    /// The pack-relative files this manifest references, including the
+    /// manifest itself — the complete on-disk closure of the pack. Lives
+    /// next to the schema so a new file-referencing field is added here in
+    /// the same change; installers copy exactly this set.
+    #[must_use]
+    pub fn referenced_files(&self) -> BTreeSet<PathBuf> {
+        let mut files = BTreeSet::from([PathBuf::from("pack.toml")]);
+        if let Some(query) = &self.extract.query {
+            files.insert(PathBuf::from(query));
+        }
+        files.insert(PathBuf::from(&self.scaffold.template));
+        if let GrammarSource::Wasm(grammar) = &self.grammar.source {
+            files.insert(grammar.clone());
+        }
+        files
+    }
 }
 
 /// Where a loaded pack was resolved from.
@@ -626,6 +645,21 @@ fn load_embedded(dir: &Dir<'static>) -> Result<Pack> {
     })
 }
 
+/// True if `name` can be used as a pack directory name: exactly one
+/// normal path component, not hidden, no path separators. One rule shared
+/// by resolution ([`load`]) and installation (`btt pack add`), so a name
+/// that installs always loads and vice versa.
+#[must_use]
+pub fn is_safe_name(name: &str) -> bool {
+    let mut components = Path::new(name).components();
+    !name.starts_with('.')
+        && !name.contains(['/', '\\'])
+        && matches!(
+            (components.next(), components.next()),
+            (Some(Component::Normal(_)), None)
+        )
+}
+
 /// Load a pack by name, honoring the resolution order.
 ///
 /// # Errors
@@ -633,13 +667,9 @@ fn load_embedded(dir: &Dir<'static>) -> Result<Pack> {
 /// Returns [`Error::PackNotFound`] if no source provides the pack, or an
 /// error describing the broken file if a pack exists but fails to load.
 pub fn load(name: &str, project_root: &Path) -> Result<Pack> {
-    // The name is joined into filesystem paths below: a single normal
-    // path component only, so `load("../../x")` cannot walk anywhere.
-    let mut components = Path::new(name).components();
-    if !matches!(
-        (components.next(), components.next()),
-        (Some(Component::Normal(_)), None)
-    ) {
+    // The name is joined into filesystem paths below, so `load("../../x")`
+    // cannot walk anywhere.
+    if !is_safe_name(name) {
         return Err(Error::UnsafePath {
             pack: name.to_string(),
             field: "pack name",

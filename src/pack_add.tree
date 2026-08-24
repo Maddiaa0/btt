@@ -1,15 +1,20 @@
 thin pack installation
 ├── when adding a local pack
 │   ├── it copies only the manifest closure
-│   └── it refuses to replace an existing pack
+│   ├── it refuses to replace an existing pack
+│   └── it sweeps staging left by interrupted runs
 ├── when the source contains an unsafe pack name
 │   └── it refuses to write outside the packs directory
+├── when the source declares a wasm grammar
+│   └── it refuses a pack whose grammar file is missing
 ├── when selecting a pack subdirectory
 │   └── it rejects paths outside the source
 ├── when the project packs directory escapes
 │   └── it refuses to write outside the project
 ├── when adding a git repository
-│   └── it clones and adds the pack
+│   ├── it clones and adds the pack
+│   └── it refuses a local path when git is forced
 └── when parsing a git source
     ├── it expands a github shorthand
+    ├── it keeps an existing git suffix
     └── it rejects an unknown source

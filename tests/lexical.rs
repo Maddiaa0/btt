@@ -112,6 +112,48 @@ describe("real", () => {
     }
 }
 
+mod when_aliases_bind_describe_and_it {
+    use super::*;
+
+    // Alias declarations — direct, modifier, Playwright, conditional,
+    // type-annotated, chained — plus decoys that must not count (a string
+    // initializer, an unrelated identifier). Both backends must agree on
+    // every one.
+    #[test]
+    fn matches_the_native_extraction() {
+        assert_equivalent(
+            r#"
+import { describe, it, suite, test } from "vitest";
+const runDb = !!process.env.DB;
+const describeDb = runDb ? describe : describe.skip;
+const itDb: unknown = runDb ? it : it.skip;
+const suiteOnly = suite.only;
+const pw = test.describe;
+const chained = describeDb;
+const notAnAlias = makeDescribe;
+const decoy = "describe";
+describeDb("HashMap", () => {
+  describe("when the key is present", () => {
+    itDb("returns the value", () => {});
+    itDb.skip("skips this one", () => {});
+  });
+  describeDb.only("when the key is absent", () => {
+    it("returns none", () => {});
+  });
+});
+chained("chained root", () => {
+  suiteOnly("nested", () => {
+    test("works", () => {});
+  });
+});
+pw("playwright style", () => {
+  it("also works", () => {});
+});
+"#,
+        );
+    }
+}
+
 mod when_fuzzing_random_test_files {
     use super::*;
 
@@ -169,7 +211,62 @@ mod when_fuzzing_random_test_files {
         rng.pick(&["", "", "", "/* trivia */"])
     }
 
-    fn gen_items(rng: &mut Rng, depth: usize, out: &mut String) {
+    /// Locally declared aliases of block/test callees available to a file.
+    struct Aliases {
+        blocks: Vec<String>,
+        tests: Vec<String>,
+    }
+
+    /// Emit 0..=2 alias declarations of each kind, plus alias-shaped decoy
+    /// declarations both backends must ignore.
+    fn gen_aliases(rng: &mut Rng, out: &mut String) -> Aliases {
+        use std::fmt::Write;
+        let mut aliases = Aliases {
+            blocks: Vec::new(),
+            tests: Vec::new(),
+        };
+        for i in 0..rng.below(3) {
+            let src = *rng.pick(&[
+                "describe",
+                "suite",
+                "describe.skip",
+                "test.describe",
+                "flag ? describe : describe.skip",
+                "flag ? describe.only : suite",
+            ]);
+            let name = format!("dAlias{i}");
+            let _ = writeln!(out, "const {name} = {src};");
+            aliases.blocks.push(name);
+        }
+        for i in 0..rng.below(3) {
+            let src = *rng.pick(&["it", "test", "it.skip", "flag ? it : test.todo"]);
+            let name = format!("tAlias{i}");
+            let _ = writeln!(out, "const {name} = {src};");
+            aliases.tests.push(name);
+        }
+        if rng.below(2) == 0 {
+            let _ = writeln!(out, "const dFake{} = \"describe\";", rng.below(100));
+        }
+        if rng.below(2) == 0 {
+            let _ = writeln!(out, "const dNope{} = describeFactory;", rng.below(100));
+        }
+        aliases
+    }
+
+    /// A block or test callee: usually the literal keyword forms, sometimes
+    /// a declared alias (optionally with a modifier).
+    fn callee(rng: &mut Rng, pool: &[&str], aliases: &[String], modifier: &str) -> String {
+        if !aliases.is_empty() && rng.below(3) == 0 {
+            let base = rng.pick(aliases).clone();
+            if rng.below(3) == 0 {
+                return format!("{base}{modifier}");
+            }
+            return base;
+        }
+        (*rng.pick(pool)).to_string()
+    }
+
+    fn gen_items(rng: &mut Rng, depth: usize, out: &mut String, aliases: &Aliases) {
         use std::fmt::Write;
         let indent = "  ".repeat(depth + 1);
         for _ in 0..=rng.below(3) {
@@ -184,12 +281,9 @@ mod when_fuzzing_random_test_files {
                     );
                 }
                 1 => {
+                    let f = callee(rng, &["test"], &aliases.tests, ".skip");
                     let (tr, name) = (trivia(rng), title(rng));
-                    let _ = writeln!(
-                        out,
-                        "{indent}test{tr}({}, () => {{}});",
-                        literal(rng, &name)
-                    );
+                    let _ = writeln!(out, "{indent}{f}{tr}({}, () => {{}});", literal(rng, &name));
                 }
                 2 => {
                     let name = title(rng);
@@ -203,10 +297,15 @@ mod when_fuzzing_random_test_files {
                     );
                 }
                 _ => {
-                    let f = rng.pick(&["describe", "suite", "describe.only", "test.describe"]);
+                    let f = callee(
+                        rng,
+                        &["describe", "suite", "describe.only", "test.describe"],
+                        &aliases.blocks,
+                        ".only",
+                    );
                     let (tr, name) = (trivia(rng), title(rng));
                     let _ = writeln!(out, "{indent}{f}{tr}({}, () => {{", literal(rng, &name));
-                    gen_items(rng, depth + 1, out);
+                    gen_items(rng, depth + 1, out, aliases);
                     let _ = writeln!(out, "{indent}}});");
                 }
             }
@@ -215,11 +314,13 @@ mod when_fuzzing_random_test_files {
 
     fn gen_file(rng: &mut Rng) -> String {
         use std::fmt::Write;
-        let mut out = String::from("import { describe, it } from \"vitest\";\n");
+        let mut out = String::from("import { describe, it } from \"vitest\";\nconst flag = 0;\n");
+        let aliases = gen_aliases(rng, &mut out);
         for _ in 0..=rng.below(2) {
+            let f = callee(rng, &["describe"], &aliases.blocks, ".skip");
             let name = title(rng);
-            let _ = writeln!(out, "describe({}, () => {{", literal(rng, &name));
-            gen_items(rng, 0, &mut out);
+            let _ = writeln!(out, "{f}({}, () => {{", literal(rng, &name));
+            gen_items(rng, 0, &mut out, &aliases);
             out.push_str("});\n");
         }
         out
@@ -227,8 +328,9 @@ mod when_fuzzing_random_test_files {
 
     #[test]
     fn never_diverges_from_the_native_extraction() {
-        // 150 seeds ≈ 13s in debug — the cost is the *native* reference
-        // (per-extract query compilation), not the lexical scan.
+        // 150 seeds ≈ 35s in debug — the cost is the *native* reference
+        // (per-extract query compilation, once per alias fixpoint pass),
+        // not the lexical scan.
         let (native_p, lexical_p) = (native_pack(), lexical_pack());
         for seed in 0..150u64 {
             let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
@@ -534,6 +636,7 @@ mod when_a_lexical_profile_is_malformed {
                 r#"nest = [["((", "))"]]"#,
             ),
             ("missing name group", "(?<name>", "(?<title>"),
+            ("missing alias src group", "(?<src>", "(?<origin>"),
             ("invalid regex", "(?<kw>", "(?<kw>["),
         ] {
             let mutated = base.replace(from, to);

@@ -9,6 +9,14 @@
 //! - `@test.marker` — optional; a node (e.g. a `#[test]` attribute) that must
 //!   directly precede a `@test` among its siblings for it to count, when the
 //!   pack sets `extract.test_requires_marker = true`.
+//! - `@block.alias` / `@test.alias` — optional; identifiers the file binds
+//!   as local aliases of block/test callees (a vitest
+//!   `const describeDb = flag ? describe : describe.skip`). Discovered
+//!   names are substituted into the query's `{{block_aliases}}` /
+//!   `{{test_aliases}}` placeholders (regex-escaped, `|`-joined; a
+//!   match-nothing class while empty) and the query re-runs until the sets
+//!   stop growing, so aliases — and aliases of aliases — extract like the
+//!   callees they stand for.
 //!
 //! Nesting is derived structurally: a captured node's parent is the smallest
 //! captured `@block` that contains it. This works for both block-based
@@ -17,6 +25,7 @@
 
 use crate::error::{Error, Result};
 use crate::pack::{self, NameSyntax, Pack};
+use std::collections::BTreeSet;
 use std::path::Path;
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
 
@@ -84,7 +93,105 @@ pub fn extract(pack: &Pack, target: &Path, source: &str) -> Result<Vec<ActualNod
     }
     let (tree, language) = parse_source(pack, target, source)?;
 
-    let query = Query::new(&language, &pack.query).map_err(|source| Error::Query {
+    // Alias fixpoint: run the query, fold any `@block.alias` /
+    // `@test.alias` names it discovers into the placeholder substitution,
+    // and re-run until the substituted query stops changing. Queries with
+    // no alias captures or placeholders stabilize after one pass.
+    let mut aliases = AliasSet::default();
+    let mut query_text = aliases.substitute(&pack.query);
+    let QueryPass {
+        mut captures,
+        markers: marker_ranges,
+    } = loop {
+        let pass = run_query(pack, &language, &tree, source, &query_text, &mut aliases)?;
+        let next = aliases.substitute(&pack.query);
+        if next == query_text {
+            break pass;
+        }
+        query_text = next;
+    };
+
+    // Sort into pre-order (parents before children) and deduplicate: a node
+    // can appear in multiple query matches.
+    captures.sort_by_key(|c| (c.start, std::cmp::Reverse(c.end)));
+    captures.dedup_by_key(|c| (c.start, c.end, c.kind));
+
+    if pack.manifest.extract.test_requires_marker {
+        captures.retain(|c| {
+            c.kind != ActualKind::Test || has_marker(tree.root_node(), c, &marker_ranges)
+        });
+    }
+
+    // In pre-order, a block's descendants are exactly the following captures
+    // whose start lies before the block's end, so one cursor pass builds the
+    // whole forest.
+    let mut i = 0;
+    let top = build_nodes(&captures, &mut i, usize::MAX);
+    Ok(ActualNode::prune_empty_blocks(top))
+}
+
+/// Alias names discovered while extracting one file, by kind. Shared with
+/// the lexical backend, which runs the same fixpoint over its own
+/// patterns.
+#[derive(Debug, Default)]
+pub(crate) struct AliasSet {
+    pub(crate) blocks: BTreeSet<String>,
+    pub(crate) tests: BTreeSet<String>,
+}
+
+impl AliasSet {
+    /// Replace `{{block_aliases}}` / `{{test_aliases}}` in a pack pattern
+    /// with the discovered names as a regex alternation.
+    pub(crate) fn substitute(&self, pattern: &str) -> String {
+        pattern
+            .replace("{{block_aliases}}", &Self::alternation(&self.blocks))
+            .replace("{{test_aliases}}", &Self::alternation(&self.tests))
+    }
+
+    /// `name1|name2` with regex metacharacters escaped — or, while the set
+    /// is empty, a class matching no character, so a placeholder can never
+    /// make its enclosing alternative match.
+    fn alternation(names: &BTreeSet<String>) -> String {
+        if names.is_empty() {
+            return r"[^\s\S]".to_string();
+        }
+        names
+            .iter()
+            .map(|n| regex::escape(n))
+            .collect::<Vec<_>>()
+            .join("|")
+    }
+
+    pub(crate) fn insert(&mut self, kind: ActualKind, name: &str) {
+        let set = match kind {
+            ActualKind::Block => &mut self.blocks,
+            ActualKind::Test => &mut self.tests,
+        };
+        if !set.contains(name) {
+            set.insert(name.to_string());
+        }
+    }
+}
+
+/// What one pass of a pack's query over a file yields.
+struct QueryPass {
+    captures: Vec<Capture>,
+    /// `@test.marker` node ranges, as (start, end) bytes.
+    markers: Vec<(usize, usize)>,
+}
+
+/// One pass of the pack's query over an already-parsed tree: collect
+/// definition captures and marker ranges, folding any `@block.alias` /
+/// `@test.alias` names into `aliases`.
+fn run_query(
+    pack: &Pack,
+    language: &tree_sitter::Language,
+    tree: &tree_sitter::Tree,
+    source: &str,
+    query_text: &str,
+    aliases: &mut AliasSet,
+) -> Result<QueryPass> {
+    let query = Query::new(language, query_text).map_err(|source| Error::Query {
         pack: pack.name().to_string(),
         source: Box::new(source),
     })?;
@@ -106,9 +213,13 @@ pub fn extract(pack: &Pack, target: &Path, source: &str) -> Result<Vec<ActualNod
             pack: pack.name().to_string(),
         });
     }
+    let alias_is = [
+        (ActualKind::Block, idx_of("block.alias")),
+        (ActualKind::Test, idx_of("test.alias")),
+    ];
 
     let mut captures: Vec<Capture> = Vec::new();
-    let mut marker_ranges: Vec<(usize, usize)> = Vec::new(); // (start, end) bytes
+    let mut markers: Vec<(usize, usize)> = Vec::new();
     let syntax = pack.manifest.extract.name_syntax;
 
     let mut cursor = QueryCursor::new();
@@ -128,27 +239,17 @@ pub fn extract(pack: &Pack, target: &Path, source: &str) -> Result<Vec<ActualNod
         if let Some(i) = marker_i
             && let Some(n) = node_for(i)
         {
-            marker_ranges.push((n.start_byte(), n.end_byte()));
+            markers.push((n.start_byte(), n.end_byte()));
+        }
+        for (kind, i) in alias_is {
+            if let Some(i) = i
+                && let Some(n) = node_for(i)
+            {
+                aliases.insert(kind, &source[n.byte_range()]);
+            }
         }
     }
-
-    // Sort into pre-order (parents before children) and deduplicate: a node
-    // can appear in multiple query matches.
-    captures.sort_by_key(|c| (c.start, std::cmp::Reverse(c.end)));
-    captures.dedup_by_key(|c| (c.start, c.end, c.kind));
-
-    if pack.manifest.extract.test_requires_marker {
-        captures.retain(|c| {
-            c.kind != ActualKind::Test || has_marker(tree.root_node(), c, &marker_ranges)
-        });
-    }
-
-    // In pre-order, a block's descendants are exactly the following captures
-    // whose start lies before the block's end, so one cursor pass builds the
-    // whole forest.
-    let mut i = 0;
-    let top = build_nodes(&captures, &mut i, usize::MAX);
-    Ok(ActualNode::prune_empty_blocks(top))
+    Ok(QueryPass { captures, markers })
 }
 
 /// Parse a source file with the pack's grammar, returning the syntax tree

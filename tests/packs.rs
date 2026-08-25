@@ -114,6 +114,52 @@ test.describe("HashMap", () => {
     }
 }
 
+mod when_checking_an_aliased_typescript_file {
+    use super::*;
+
+    // The reported real-world shape: a conditional describe alias gating a
+    // suite on the environment. The extractor must resolve the alias, or
+    // the root shows as missing and every inner block as extra.
+    #[test]
+    fn resolves_conditional_describe_and_it_aliases() {
+        let source = r#"
+import { describe, it } from "vitest";
+const runDb = !!process.env.DB;
+const describeDb = runDb ? describe : describe.skip;
+const itDb = runDb ? it : it.skip;
+describeDb("HashMap", () => {
+  describe("when the key is present", () => {
+    itDb("returns the value", () => {});
+  });
+  describeDb("when the key is absent", () => {
+    it("returns none", () => {});
+  });
+});
+"#;
+        let findings = ts_findings(source);
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    #[test]
+    fn resolves_an_alias_of_an_alias() {
+        let source = r#"
+import { describe, it } from "vitest";
+const describeDb = describe.skip;
+const describeDb2 = describeDb;
+describeDb2("HashMap", () => {
+  describeDb("when the key is present", () => {
+    it("returns the value", () => {});
+  });
+  describe("when the key is absent", () => {
+    it("returns none", () => {});
+  });
+});
+"#;
+        let findings = ts_findings(source);
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+}
+
 mod when_scaffolding_from_a_tree {
     use super::*;
 

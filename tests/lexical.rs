@@ -433,9 +433,14 @@ mod when_a_raw_name_profile_extracts_declarations {
     // parameter list or body brace) follows the name. This is the shape
     // Solidity/Foundry, Go, and pytest conventions take.
     const SOLIDITY_MANIFEST: &str = r#"
+format = 1
+
 [pack]
 name = "solidity-lex"
 version = "0.0.1"
+
+[compat]
+btt = ">=0.2.0"
 
 [detect]
 targets = ["{stem}.t.sol"]

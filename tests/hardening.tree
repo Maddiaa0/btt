@@ -10,5 +10,12 @@ pack hardening
 │   └── it refuses to load
 ├── when a manifest contains unknown fields
 │   └── it refuses to load
+├── when a manifest uses invalid semantic versions
+│   ├── it refuses a malformed pack version
+│   └── it refuses a malformed btt requirement
+├── when a pack uses an unsupported manifest format
+│   └── it refuses to load
+├── when a pack requires an incompatible btt
+│   └── it refuses to load
 └── when a project pack shadows a builtin name
     └── it is bypassed by the builtin loader

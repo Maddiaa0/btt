@@ -41,12 +41,16 @@
 use crate::error::{Error, Result};
 use crate::mapping::Mapping;
 use include_dir::{Dir, include_dir};
+use semver::{Version, VersionReq};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
 
 static EMBEDDED_PACKS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/packs");
+
+/// The `pack.toml` schema understood by this btt release.
+pub const PACK_FORMAT_VERSION: u32 = 1;
 
 /// Identity section of a pack manifest.
 #[derive(Debug, Deserialize)]
@@ -55,10 +59,18 @@ pub struct PackMeta {
     /// Pack name (matches its directory name).
     pub name: String,
     /// Pack version.
-    pub version: String,
+    pub version: Version,
     /// One-line description shown by `btt packs`.
     #[serde(default)]
     pub description: String,
+}
+
+/// Compatibility between a pack release and the btt runtime.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Compatibility {
+    /// `SemVer` requirement matched against the running btt version.
+    pub btt: VersionReq,
 }
 
 /// How files are routed to this pack.
@@ -214,8 +226,12 @@ fn default_indent() -> String {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
+    /// Version of the declarative manifest schema, independent of the pack.
+    pub format: u32,
     /// Identity.
     pub pack: PackMeta,
+    /// Runtime compatibility declared by the pack.
+    pub compat: Compatibility,
     /// File routing.
     pub detect: Detect,
     /// Grammar source.
@@ -230,6 +246,19 @@ pub struct Manifest {
     pub lexical: Option<Lexical>,
     /// Scaffold template configuration.
     pub scaffold: Scaffold,
+}
+
+/// Minimal first pass used to reject a future manifest format before its
+/// fields are interpreted as the current strict schema.
+#[derive(Deserialize)]
+struct ManifestHeader {
+    format: u32,
+    pack: ManifestPackHeader,
+}
+
+#[derive(Deserialize)]
+struct ManifestPackHeader {
+    name: String,
 }
 
 /// Where a loaded pack was resolved from.
@@ -342,6 +371,23 @@ fn confine(pack: &str, field: &'static str, value: &str) -> Result<()> {
 /// nothing grammar-shaped; a grammar pack needs its query).
 fn validate(manifest: &Manifest) -> Result<()> {
     let pack = &manifest.pack.name;
+    if manifest.format != PACK_FORMAT_VERSION {
+        return Err(Error::UnsupportedPackFormat {
+            pack: pack.clone(),
+            format: manifest.format,
+            supported: PACK_FORMAT_VERSION,
+        });
+    }
+    let current =
+        Version::parse(env!("CARGO_PKG_VERSION")).expect("Cargo version must be valid SemVer");
+    if !manifest.compat.btt.matches(&current) {
+        return Err(Error::IncompatibleBtt {
+            pack: pack.clone(),
+            version: manifest.pack.version.to_string(),
+            requirement: manifest.compat.btt.to_string(),
+            current: current.to_string(),
+        });
+    }
     let shape = |message: &str| Error::Manifest {
         pack: pack.clone(),
         message: message.to_string(),
@@ -454,6 +500,22 @@ fn read(path: &Path) -> Result<String> {
     std::fs::read_to_string(path).map_err(|source| Error::io(path, source))
 }
 
+fn parse_manifest(raw: &str, path: &Path) -> Result<Manifest> {
+    let toml_error = |source| Error::Toml {
+        path: path.to_path_buf(),
+        source: Box::new(source),
+    };
+    let header: ManifestHeader = toml::from_str(raw).map_err(toml_error)?;
+    if header.format != PACK_FORMAT_VERSION {
+        return Err(Error::UnsupportedPackFormat {
+            pack: header.pack.name,
+            format: header.format,
+            supported: PACK_FORMAT_VERSION,
+        });
+    }
+    toml::from_str(raw).map_err(toml_error)
+}
+
 /// Resolve a pack-relative file to its real path, requiring it to still be
 /// a regular file inside the pack directory after following symlinks.
 /// `confine` checks the textual path; this closes the symlink hole.
@@ -485,11 +547,7 @@ fn load_from_dir(dir: &Path, origin: Origin) -> Result<Pack> {
         |n| n.to_string_lossy().into_owned(),
     );
     let manifest_path = resolve_inside(dir, Path::new("pack.toml"), &label, "pack.toml")?;
-    let manifest: Manifest =
-        toml::from_str(&read(&manifest_path)?).map_err(|source| Error::Toml {
-            path: manifest_path,
-            source: Box::new(source),
-        })?;
+    let manifest = parse_manifest(&read(&manifest_path)?, &manifest_path)?;
     validate(&manifest)?;
     let name = manifest.pack.name.clone();
     let query = match &manifest.extract.query {
@@ -545,10 +603,8 @@ fn load_embedded(dir: &Dir<'static>) -> Result<Pack> {
                 file: p.to_string(),
             })
     };
-    let manifest: Manifest = toml::from_str(file("pack.toml")?).map_err(|source| Error::Toml {
-        path: PathBuf::from(format!("<builtin:{pack_name}>/pack.toml")),
-        source: Box::new(source),
-    })?;
+    let manifest_path = PathBuf::from(format!("<builtin:{pack_name}>/pack.toml"));
+    let manifest = parse_manifest(file("pack.toml")?, &manifest_path)?;
     validate(&manifest)?;
     let query = match &manifest.extract.query {
         Some(q) => file(q)?.to_string(),

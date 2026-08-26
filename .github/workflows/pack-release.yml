@@ -1,15 +1,15 @@
-name: CI
+name: Pack release
 
 on:
   push:
-    branches: [main, master]
-  pull_request:
+    tags:
+      - "pack/*/v*"
 
-env:
-  CARGO_TERM_COLOR: always
+permissions:
+  contents: write
 
 jobs:
-  test:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,22 +19,21 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      - name: Validate tag and manifest
+        run: cargo run --locked --example check_pack_releases -- --tag "$GITHUB_REF_NAME"
       - name: Format
         run: cargo fmt --all -- --check
-      - name: Pack release versions
-        if: github.event_name == 'pull_request'
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: cargo run --locked --example check_pack_releases -- --base "$BASE_SHA"
       - name: Test
         run: cargo test --locked
-      - name: Clippy (pedantic, no warnings)
+      - name: Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
-      - name: BTT self-check
-        run: cargo run --locked -- check
       - name: Fetch pinned wasm grammars
         run: ./scripts/fetch-wasm-grammars.sh
       - name: Test (wasm grammars)
         run: cargo test --locked --features wasm
       - name: Clippy (wasm, no warnings)
         run: cargo clippy --locked --all-targets --features wasm -- -D warnings
+      - name: Publish immutable GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "$GITHUB_REF_NAME"

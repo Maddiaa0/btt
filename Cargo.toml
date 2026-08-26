@@ -1,6 +1,6 @@
 [package]
 name = "btt"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Branch tree testing for any language: check and scaffold test suites from bulloak-style .tree specs"
@@ -18,6 +18,7 @@ include_dir = "0.7.4"
 minijinja = "2.23.0"
 rayon = "1.12.0"
 regex = "1.13.1"
+semver = { version = "1.0.28", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
 thiserror = "2.0.20"
 toml = "1.1.4"

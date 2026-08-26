@@ -65,6 +65,30 @@ pub enum Error {
         message: String,
     },
 
+    /// A pack uses a manifest format this btt does not understand.
+    #[error("pack `{pack}` uses manifest format {format}; this btt supports format {supported}")]
+    UnsupportedPackFormat {
+        /// The pack with the unsupported manifest.
+        pack: String,
+        /// The format declared by the pack.
+        format: u32,
+        /// The format understood by this btt.
+        supported: u32,
+    },
+
+    /// A pack is not compatible with the running btt version.
+    #[error("pack `{pack}` v{version} requires btt {requirement}; running btt {current}")]
+    IncompatibleBtt {
+        /// The incompatible pack.
+        pack: String,
+        /// The pack's independently released version.
+        version: String,
+        /// The btt versions accepted by the pack.
+        requirement: String,
+        /// The running btt version.
+        current: String,
+    },
+
     /// Lexical extraction could not account for the source file.
     #[error("pack `{pack}`: lexical extraction: {message}")]
     Lexical {

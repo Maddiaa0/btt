@@ -11,9 +11,14 @@ fn repo_root() -> &'static Path {
 }
 
 const VALID_MANIFEST: &str = r#"
+format = 1
+
 [pack]
 name = "fixture"
 version = "0.0.1"
+
+[compat]
+btt = ">=0.2.0"
 
 [detect]
 targets = ["{stem}.rs"]
@@ -146,6 +151,64 @@ mod when_a_manifest_contains_unknown_fields {
         let err = pack::load_dir(&dir).unwrap_err();
         assert!(matches!(err, Error::Toml { .. }), "{err}");
         assert!(err.to_string().contains("test_require_marker"), "{err}");
+    }
+}
+
+mod when_a_manifest_uses_invalid_semantic_versions {
+    use super::*;
+
+    #[test]
+    fn refuses_a_malformed_pack_version() {
+        let dir = fixture_pack("bad-pack-version", |m| {
+            m.replace("version = \"0.0.1\"", "version = \"tomorrow\"")
+        });
+        let err = pack::load_dir(&dir).unwrap_err();
+        assert!(matches!(err, Error::Toml { .. }), "{err}");
+    }
+
+    #[test]
+    fn refuses_a_malformed_btt_requirement() {
+        let dir = fixture_pack("bad-btt-requirement", |m| {
+            m.replace("btt = \">=0.2.0\"", "btt = \"eventually\"")
+        });
+        let err = pack::load_dir(&dir).unwrap_err();
+        assert!(matches!(err, Error::Toml { .. }), "{err}");
+    }
+}
+
+mod when_a_pack_uses_an_unsupported_manifest_format {
+    use super::*;
+
+    #[test]
+    fn refuses_to_load() {
+        // Read the format header before applying the strict format-1 schema:
+        // future fields should not hide the actionable compatibility error.
+        let dir = fixture_pack("unsupported-format", |m| {
+            m.replace("format = 1", "format = 2\nfuture_field = true")
+        });
+        let err = pack::load_dir(&dir).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::UnsupportedPackFormat {
+                format: 2,
+                supported: 1,
+                ..
+            }
+        ));
+    }
+}
+
+mod when_a_pack_requires_an_incompatible_btt {
+    use super::*;
+
+    #[test]
+    fn refuses_to_load() {
+        let dir = fixture_pack("incompatible-btt", |m| {
+            m.replace("btt = \">=0.2.0\"", "btt = \"=9999.0.0\"")
+        });
+        let err = pack::load_dir(&dir).unwrap_err();
+        assert!(matches!(err, Error::IncompatibleBtt { .. }), "{err}");
+        assert!(err.to_string().contains("requires btt =9999.0.0"), "{err}");
     }
 }
 

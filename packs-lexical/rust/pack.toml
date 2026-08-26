@@ -9,10 +9,15 @@
 # (r#"..."#) and nested block comments are not modeled. Test files that
 # hit those belong on the native grammar.
 
+format = 1
+
 [pack]
 name = "rust-lexical"
-version = "0.1.0"
+version = "0.2.0"
 description = "Rust tests via lexical scanning (no grammar): nested mod blocks, #[test] fns"
+
+[compat]
+btt = ">=0.2.0"
 
 [detect]
 targets = ["{stem}.rs"]

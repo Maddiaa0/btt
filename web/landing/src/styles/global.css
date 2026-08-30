@@ -184,6 +184,198 @@ button:focus-visible {
   font: inherit;
 }
 
+.agent-prompt {
+  width: min(620px, 94vw);
+  margin: clamp(16px, 2.5vh, 26px) 0 0;
+  overflow: hidden;
+  border: 0;
+  border-block: 1px solid #e6e2d6;
+  border-radius: 0;
+  background: transparent;
+  color: #6d675c;
+  cursor: pointer;
+  font-family: "IBM Plex Mono", monospace;
+  animation: rise-in 1.6s 0.7s both;
+}
+
+.agent-prompt-header {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 2px;
+  border-bottom: 1px solid transparent;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease;
+}
+
+.agent-prompt:hover .agent-prompt-header {
+  background: rgb(230 226 214 / 24%);
+}
+
+.agent-prompt[data-expanded="true"] .agent-prompt-header {
+  border-bottom-color: #e6e2d6;
+}
+
+.agent-prompt-copy {
+  display: flex;
+  min-width: 0;
+  height: 40px;
+  flex: 1;
+  gap: 8px;
+  align-items: center;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: #6d675c;
+  cursor: pointer;
+  font: 400 clamp(10px, 1.4vh, 12px) / 1 "IBM Plex Mono", monospace;
+  letter-spacing: 0.02em;
+  text-align: left;
+  transition: color 100ms ease;
+}
+
+.agent-prompt-copy:hover,
+.agent-prompt-copy:focus-visible {
+  color: #1c1a16;
+}
+
+.agent-prompt-sparkle {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  fill: #a5a093;
+  transition: fill 100ms ease;
+}
+
+.agent-prompt[data-state="copied"] .agent-prompt-sparkle {
+  fill: #52745a;
+}
+
+.agent-prompt[data-state="error"] .agent-prompt-copy {
+  color: #9c5149;
+}
+
+.agent-prompt-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  align-items: center;
+}
+
+.agent-prompt-action {
+  display: inline-flex;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: #8d877c;
+  cursor: pointer;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 9px;
+  line-height: 1;
+  text-decoration: none;
+  transition:
+    color 100ms ease,
+    background-color 100ms ease;
+}
+
+.agent-prompt-action:hover {
+  background: transparent;
+  color: #1c1a16;
+  text-decoration: none;
+}
+
+.agent-chat-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.agent-prompt-toggle {
+  width: 30px;
+  padding: 0;
+}
+
+.agent-prompt-toggle svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+.agent-prompt-toggle[aria-expanded="true"] {
+  color: #1c1a16;
+}
+
+.agent-prompt-content {
+  position: relative;
+  overflow: hidden;
+  background: rgb(230 226 214 / 18%);
+}
+
+.agent-prompt-content::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 25%,
+    rgb(140 119 80 / 9%) 50%,
+    transparent 75%
+  );
+  content: "";
+  pointer-events: none;
+  transform: translateX(-120%);
+}
+
+.agent-prompt:hover .agent-prompt-content::after {
+  animation: prompt-shimmer 900ms ease-out;
+}
+
+.agent-prompt-content pre {
+  margin: 0;
+  padding: 14px 10px;
+  color: #4a463e;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: clamp(9px, 1.3vh, 11px);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.agent-prompt-content code {
+  font: inherit;
+}
+
+.agent-prompt-content a {
+  color: #6d675c;
+  text-decoration: underline;
+  text-decoration-color: rgb(120 98 59 / 35%);
+  text-underline-offset: 2px;
+}
+
+.agent-prompt-content a:hover {
+  color: #1c1a16;
+  text-decoration-color: #1c1a16;
+}
+
+.agent-prompt-content span {
+  color: inherit;
+  font: inherit;
+}
+
+@keyframes prompt-shimmer {
+  to {
+    transform: translateX(120%);
+  }
+}
+
 @keyframes rise-in {
   from {
     opacity: 0;
@@ -220,6 +412,10 @@ button:focus-visible {
     max-width: 94vw;
     overflow-x: auto;
   }
+
+  .agent-prompt {
+    margin-top: 24px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -229,5 +425,9 @@ button:focus-visible {
     scroll-behavior: auto !important;
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+  }
+
+  .agent-prompt:hover .agent-prompt-content::after {
+    animation: none;
   }
 }

@@ -54,6 +54,18 @@ fn check(root: &Path) -> (bool, String) {
     )
 }
 
+fn check_path(root: &Path, path: &str) -> (bool, String) {
+    let out = Command::new(env!("CARGO_BIN_EXE_btt"))
+        .args(["check", path])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+    )
+}
+
 mod when_checking_a_monorepo_from_the_root {
     use super::*;
 
@@ -79,5 +91,19 @@ mod when_checking_a_monorepo_from_the_root {
         let (ok, stdout) = check(&root);
         assert!(ok, "{stdout}");
         assert!(!stdout.contains("orphan"), "{stdout}");
+    }
+
+    #[test]
+    fn ignores_a_broken_root_pack_when_checking_only_a_nested_subtree() {
+        let root = fixture("broken-root-pack");
+        std::fs::write(
+            root.join("btt.toml"),
+            "[project]\npacks = [\"does-not-exist\"]\n",
+        )
+        .unwrap();
+
+        let (ok, stdout) = check_path(&root, "web");
+        assert!(ok, "{stdout}");
+        assert!(stdout.contains("✓ web/map.tree"), "{stdout}");
     }
 }

@@ -34,7 +34,9 @@
 //! the typescript profile against the native grammar.
 
 use crate::error::{Error, Result};
-use crate::extract::{ActualKind, ActualNode, Capture, build_nodes, decode_name};
+use crate::extract::{
+    ActualKind, ActualNode, Capture, Extraction, Unsupported, build_nodes, decode_name,
+};
 use crate::pack::{Lexical, NameSyntax, Pack};
 use regex::Regex;
 use std::collections::HashMap;
@@ -83,11 +85,14 @@ pub(crate) fn validate_profile(cfg: &Lexical) -> std::result::Result<(), String>
             }
         }
     }
+    if let Some(pattern) = &cfg.unsupported {
+        compiled(&pattern.open).map_err(|e| format!("[lexical.unsupported] {e}"))?;
+    }
     Ok(())
 }
 
 /// Extract the actual test structure using the pack's lexical profile.
-pub(crate) fn extract(pack: &Pack, cfg: &Lexical, source: &str) -> Result<Vec<ActualNode>> {
+pub(crate) fn extract(pack: &Pack, cfg: &Lexical, source: &str) -> Result<Extraction> {
     let err = |message: String| Error::Lexical {
         pack: pack.name().to_string(),
         message,
@@ -117,7 +122,41 @@ pub(crate) fn extract(pack: &Pack, cfg: &Lexical, source: &str) -> Result<Vec<Ac
     captures.dedup_by_key(|c| (c.start, c.end, c.kind));
     let mut i = 0;
     let top = build_nodes(&captures, &mut i, usize::MAX);
-    Ok(ActualNode::prune_empty_blocks(top))
+    let unsupported = cfg
+        .unsupported
+        .as_ref()
+        .map_or_else(
+            || Ok(Vec::new()),
+            |pattern| collect_unsupported(&pattern.open, source, &haystack, &states),
+        )
+        .map_err(err)?;
+    Ok(Extraction {
+        nodes: ActualNode::prune_empty_blocks(top),
+        unsupported,
+    })
+}
+
+/// Collect line-only findings whose match contains real, non-trivia code.
+fn collect_unsupported(
+    pattern: &str,
+    source: &str,
+    haystack: &str,
+    states: &[State],
+) -> std::result::Result<Vec<Unsupported>, String> {
+    let re = compiled(pattern)?;
+    let mut out = Vec::new();
+    for found in re.find_iter(haystack) {
+        let code = (found.start()..found.end()).find(|&at| {
+            states.get(at) == Some(&State::Code) && !source.as_bytes()[at].is_ascii_whitespace()
+        });
+        if let Some(code) = code {
+            out.push(Unsupported {
+                line: line_of(source, code),
+            });
+        }
+    }
+    out.sort_by_key(|finding| finding.line);
+    Ok(out)
 }
 
 /// The profile's bracket pairs as single bytes (multi-byte brackets are

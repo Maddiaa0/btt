@@ -245,16 +245,19 @@ fn cmd_check(paths: &[PathBuf], jobs: Option<NonZeroUsize>, root: &Path) -> Resu
 
         let mut scans = Vec::new();
         for (sub_root, subtree) in &subtrees {
-            let level = subtree.cfg.check.uncovered;
-            if level == Level::Ignore {
+            let uncovered_level = subtree.cfg.check.uncovered;
+            let unsupported_level = subtree.cfg.check.unsupported;
+            if uncovered_level == Level::Ignore && unsupported_level == Level::Ignore {
                 continue;
             }
             let mut scan = runner::find_uncovered(&subtree.packs, &search, &tree_files);
             scan.uncovered
                 .retain(|item| config::governing_root(&item.path, root) == *sub_root);
+            scan.unsupported
+                .retain(|item| config::governing_root(&item.path, root) == *sub_root);
             scan.failed
                 .retain(|(path, _)| config::governing_root(path, root) == *sub_root);
-            scans.push((level, scan));
+            scans.push((uncovered_level, unsupported_level, scan));
         }
         (outcomes, scans)
     };
@@ -269,9 +272,9 @@ fn cmd_check(paths: &[PathBuf], jobs: Option<NonZeroUsize>, root: &Path) -> Resu
     };
 
     if tree_files.is_empty()
-        && scans
-            .iter()
-            .all(|(_, scan)| scan.uncovered.is_empty() && scan.failed.is_empty())
+        && scans.iter().all(|(_, _, scan)| {
+            scan.uncovered.is_empty() && scan.unsupported.is_empty() && scan.failed.is_empty()
+        })
     {
         println!("no .tree files found");
         return Ok(ExitCode::SUCCESS);
@@ -287,9 +290,9 @@ fn cmd_check(paths: &[PathBuf], jobs: Option<NonZeroUsize>, root: &Path) -> Resu
         }
     }
     let mut uncovered = 0usize;
-    for (level, scan) in &scans {
+    for (uncovered_level, unsupported_level, scan) in &scans {
         uncovered += scan.uncovered.len();
-        let scan_report = render_scan(scan, *level, root);
+        let scan_report = render_scan(scan, *uncovered_level, *unsupported_level, root);
         errors += scan_report.errors;
         warnings += scan_report.warnings;
         for line in &scan_report.lines {
@@ -308,7 +311,7 @@ fn cmd_check(paths: &[PathBuf], jobs: Option<NonZeroUsize>, root: &Path) -> Resu
     );
     // Spec drift exits 1; a file that could not be checked at all is a tool
     // failure and exits 2, like every other tool error.
-    let failed = scans.iter().any(|(_, scan)| !scan.failed.is_empty())
+    let failed = scans.iter().any(|(_, _, scan)| !scan.failed.is_empty())
         || outcomes
             .iter()
             .any(|o| matches!(o.result, runner::FileResult::Failed(_)));
@@ -325,31 +328,55 @@ fn cmd_check(paths: &[PathBuf], jobs: Option<NonZeroUsize>, root: &Path) -> Resu
 /// severity, then scan failures. Unverifiable coverage is a tool failure —
 /// strict projects must not go green because extraction broke — so
 /// failures are counted in full and printed capped.
-fn render_scan(scan: &runner::UncoveredScan, level: Level, root: &Path) -> FileReport {
+fn render_scan(
+    scan: &runner::UncoveredScan,
+    uncovered_level: Level,
+    unsupported_level: Level,
+    root: &Path,
+) -> FileReport {
     let mut report = FileReport {
         lines: Vec::new(),
         errors: 0,
         warnings: 0,
     };
-    for u in &scan.uncovered {
-        let rel = u.path.strip_prefix(root).unwrap_or(&u.path);
-        let sev = if level == Level::Error {
-            report.errors += 1;
-            "✗"
-        } else {
-            report.warnings += 1;
-            "!"
-        };
-        report.lines.push(format!(
-            "{sev} {} — {} test(s), not covered by any .tree",
-            rel.display(),
-            u.tests
-        ));
+    if uncovered_level != Level::Ignore {
+        for u in &scan.uncovered {
+            let rel = u.path.strip_prefix(root).unwrap_or(&u.path);
+            let sev = if uncovered_level == Level::Error {
+                report.errors += 1;
+                "✗"
+            } else {
+                report.warnings += 1;
+                "!"
+            };
+            report.lines.push(format!(
+                "{sev} {} — {} test(s), not covered by any .tree",
+                rel.display(),
+                u.tests
+            ));
+        }
+        if !scan.uncovered.is_empty() {
+            report
+                .lines
+                .push("    hint: write a .tree next to each file mirroring its tests".to_string());
+        }
     }
-    if !scan.uncovered.is_empty() {
-        report
-            .lines
-            .push("    hint: write a .tree next to each file mirroring its tests".to_string());
+    if unsupported_level != Level::Ignore {
+        for finding in &scan.unsupported {
+            let rel = finding.path.strip_prefix(root).unwrap_or(&finding.path);
+            let sev = if unsupported_level == Level::Error {
+                report.errors += 1;
+                "error"
+            } else {
+                report.warnings += 1;
+                "warn "
+            };
+            report.lines.push(format!(
+                "    {sev} unsupported: parameterized test (test.each) is not representable — expand into explicit leaves (see AGENT-SETUP) ({}:{})",
+                rel.display(),
+                finding.line
+            ));
+        }
     }
     report.errors += scan.failed.len();
     for (path, e) in scan.failed.iter().take(5) {
@@ -453,6 +480,10 @@ fn describe(finding: &Finding, tree_rel: &Path, target: &Path) -> String {
             )
         }
         Finding::OutOfOrder { path } => format!("order differs under `{path}`"),
+        Finding::Unsupported { target_line } => format!(
+            "unsupported: parameterized test (test.each) is not representable — expand into explicit leaves (see AGENT-SETUP) ({}:{target_line})",
+            target.display()
+        ),
     }
 }
 
@@ -574,6 +605,8 @@ packs = ["rust"]
 extra = "warn"
 # Severity of sibling order differing between tree and file: error | warn | ignore
 order = "warn"
+# Severity of recognized constructs btt cannot represent: error | warn | ignore
+unsupported = "error"
 # Severity of test-bearing files with no .tree spec: error | warn | ignore
 # (warn while adopting; set to "error" in CI once every file has a tree)
 uncovered = "warn"

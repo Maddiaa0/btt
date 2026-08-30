@@ -104,6 +104,11 @@ pub enum Finding {
         /// Path of the parent whose children are out of order.
         path: String,
     },
+    /// The extractor recognized a construct it cannot represent.
+    Unsupported {
+        /// 1-based line in the target file.
+        target_line: usize,
+    },
 }
 
 /// Diff expected vs actual structure.

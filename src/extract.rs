@@ -9,6 +9,8 @@
 //! - `@test.marker` — optional; a node (e.g. a `#[test]` attribute) that must
 //!   directly precede a `@test` among its siblings for it to count, when the
 //!   pack sets `extract.test_requires_marker = true`.
+//! - `@unsupported` — a construct the pack recognizes but cannot represent
+//!   as a named block or test. Only its source line is retained.
 //!
 //! Nesting is derived structurally: a captured node's parent is the smallest
 //! captured `@block` that contains it. This works for both block-based
@@ -40,6 +42,22 @@ pub struct ActualNode {
     pub line: usize,
     /// Nested nodes (always empty for tests).
     pub children: Vec<ActualNode>,
+}
+
+/// A recognized source construct that cannot be represented in a tree spec.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unsupported {
+    /// 1-based line of the construct.
+    pub line: usize,
+}
+
+/// Structural nodes and non-structural diagnostics produced in one pass.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Extraction {
+    /// Blocks and tests that can be compared with a tree spec.
+    pub nodes: Vec<ActualNode>,
+    /// Recognized constructs that cannot be represented.
+    pub unsupported: Vec<Unsupported>,
 }
 
 impl ActualNode {
@@ -79,6 +97,15 @@ pub(crate) struct Capture {
 /// Fails if the pack's grammar is unavailable, its query does not compile or
 /// lacks the required captures, or tree-sitter cannot parse the source.
 pub fn extract(pack: &Pack, target: &Path, source: &str) -> Result<Vec<ActualNode>> {
+    extract_with_findings(pack, target, source).map(|result| result.nodes)
+}
+
+/// Parse `source`, returning both its structure and unsupported constructs.
+///
+/// # Errors
+///
+/// Fails under the same conditions as [`extract`].
+pub fn extract_with_findings(pack: &Pack, target: &Path, source: &str) -> Result<Extraction> {
     if let pack::Grammar::Lexical(cfg) = pack::grammar_for(pack, target)? {
         return crate::lexical::extract(pack, cfg, source);
     }
@@ -101,6 +128,7 @@ pub fn extract(pack: &Pack, target: &Path, source: &str) -> Result<Vec<ActualNod
         });
     };
     let marker_i = idx_of("test.marker");
+    let unsupported_i = idx_of("unsupported");
     if pack.manifest.extract.test_requires_marker && marker_i.is_none() {
         return Err(Error::MissingMarkerCapture {
             pack: pack.name().to_string(),
@@ -109,6 +137,7 @@ pub fn extract(pack: &Pack, target: &Path, source: &str) -> Result<Vec<ActualNod
 
     let mut captures: Vec<Capture> = Vec::new();
     let mut marker_ranges: Vec<(usize, usize)> = Vec::new(); // (start, end) bytes
+    let mut unsupported = Vec::new();
     let syntax = pack.manifest.extract.name_syntax;
 
     let mut cursor = QueryCursor::new();
@@ -130,6 +159,13 @@ pub fn extract(pack: &Pack, target: &Path, source: &str) -> Result<Vec<ActualNod
         {
             marker_ranges.push((n.start_byte(), n.end_byte()));
         }
+        if let Some(i) = unsupported_i
+            && let Some(n) = node_for(i)
+        {
+            unsupported.push(Unsupported {
+                line: n.start_position().row + 1,
+            });
+        }
     }
 
     // Sort into pre-order (parents before children) and deduplicate: a node
@@ -148,7 +184,11 @@ pub fn extract(pack: &Pack, target: &Path, source: &str) -> Result<Vec<ActualNod
     // whole forest.
     let mut i = 0;
     let top = build_nodes(&captures, &mut i, usize::MAX);
-    Ok(ActualNode::prune_empty_blocks(top))
+    unsupported.sort_by_key(|finding| finding.line);
+    Ok(Extraction {
+        nodes: ActualNode::prune_empty_blocks(top),
+        unsupported,
+    })
 }
 
 /// Parse a source file with the pack's grammar, returning the syntax tree

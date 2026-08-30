@@ -43,9 +43,9 @@ fn fixture_pack(case: &str, manifest: &str) -> btt::Result<Pack> {
 
 /// Extract with both backends; panic with the source on any divergence.
 fn assert_equivalent(source: &str) {
-    let native = extract::extract(&native_pack(), Path::new("map.test.ts"), source)
+    let native = extract::extract_with_findings(&native_pack(), Path::new("map.test.ts"), source)
         .unwrap_or_else(|e| panic!("native extraction failed: {e}\n---\n{source}"));
-    let lexical = extract::extract(&lexical_pack(), Path::new("map.test.ts"), source)
+    let lexical = extract::extract_with_findings(&lexical_pack(), Path::new("map.test.ts"), source)
         .unwrap_or_else(|e| panic!("lexical extraction failed: {e}\n---\n{source}"));
     assert_eq!(
         native, lexical,
@@ -81,6 +81,25 @@ it.describe("also a block", () => {
 describe/* legal trivia */("comments between tokens", () => {
   it/* here too */("still matches", () => {});
   it("and after the title" /* trailing */, () => {});
+});
+"#,
+        );
+    }
+
+    #[test]
+    fn reports_parameterized_tests_identically() {
+        assert_equivalent(
+            r#"
+describe("parameterized", () => {
+  test.each([[1], [2]])("curried %s", value => {});
+  it.each`value | expected
+    ${1}  | ${2}
+  `("tagged $value", ({ value, expected }) => {});
+  describe.each(cases)("nested %s", value => {});
+  myArray.each(value => consume(value));
+  holder.test.each(cases)("not a recognized receiver", () => {});
+  const text = "test.each(cases)(\"decoy\", fn)";
+  // test.each(cases)("comment decoy", fn);
 });
 "#,
         );
@@ -233,10 +252,12 @@ mod when_fuzzing_random_test_files {
         for seed in 0..150u64 {
             let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
             let source = gen_file(&mut rng);
-            let native = extract::extract(&native_p, Path::new("map.test.ts"), &source)
-                .unwrap_or_else(|e| panic!("seed {seed}: native failed: {e}\n---\n{source}"));
-            let lexical = extract::extract(&lexical_p, Path::new("map.test.ts"), &source)
-                .unwrap_or_else(|e| panic!("seed {seed}: lexical failed: {e}\n---\n{source}"));
+            let native =
+                extract::extract_with_findings(&native_p, Path::new("map.test.ts"), &source)
+                    .unwrap_or_else(|e| panic!("seed {seed}: native failed: {e}\n---\n{source}"));
+            let lexical =
+                extract::extract_with_findings(&lexical_p, Path::new("map.test.ts"), &source)
+                    .unwrap_or_else(|e| panic!("seed {seed}: lexical failed: {e}\n---\n{source}"));
             assert_eq!(
                 native, lexical,
                 "seed {seed} diverged\n--- source ---\n{source}\n--- native ---\n{native:#?}\n--- lexical ---\n{lexical:#?}"

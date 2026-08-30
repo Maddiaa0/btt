@@ -6,5 +6,7 @@ packs = ["rust"]
 [check]
 extra = "warn"
 order = "warn"
+# Parameterized tests cannot be represented as explicit tree leaves.
+unsupported = "error"
 # Every test-bearing file must have a .tree spec (dogfooding the ratchet).
 uncovered = "error"

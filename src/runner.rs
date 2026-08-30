@@ -64,6 +64,15 @@ pub struct Uncovered {
     pub tests: usize,
 }
 
+/// An unsupported construct found in a source file with no routed tree.
+#[derive(Debug)]
+pub struct UncoveredUnsupported {
+    /// Source file containing the construct.
+    pub path: PathBuf,
+    /// 1-based source line.
+    pub line: usize,
+}
+
 /// Derive the `{stem}` a file name would need for `pattern` to produce it,
 /// if it matches at all (`map.test.ts` against `{stem}.test.ts` → `map`).
 fn stem_for(pattern: &str, file_name: &str) -> Option<String> {
@@ -88,12 +97,16 @@ fn count_actual_tests(nodes: &[extract::ActualNode]) -> usize {
 pub struct UncoveredScan {
     /// Test-bearing files no tree routes to, in path order.
     pub uncovered: Vec<Uncovered>,
+    /// Unsupported constructs in files that no tree routes to.
+    pub unsupported: Vec<UncoveredUnsupported>,
     /// Candidates that could not be scanned (unreadable file or directory,
     /// grammar unavailable, …). Unverifiable coverage is a tool failure,
     /// not an absence of findings — strict projects must not pass because
     /// extraction or the directory walk broke.
     pub failed: Vec<(PathBuf, Error)>,
 }
+
+type CandidateScanResult = Result<(usize, Vec<extract::Unsupported>)>;
 
 /// Find source files under `paths` that contain tests but that no `.tree`
 /// spec routes to. This is what keeps partial adoption honest: `check`
@@ -159,13 +172,13 @@ pub fn find_uncovered(packs: &[Pack], paths: &[PathBuf], tree_files: &[PathBuf])
     candidates.sort_by(|a, b| a.0.cmp(&b.0));
     candidates.dedup_by(|a, b| a.0 == b.0);
 
-    let results: Vec<(PathBuf, Result<usize>)> = candidates
+    let results: Vec<(PathBuf, CandidateScanResult)> = candidates
         .par_iter()
         .map(|(path, pack)| {
             let count = std::fs::read_to_string(path)
                 .map_err(|source| Error::io(path, source))
-                .and_then(|source| extract::extract(pack, path, &source))
-                .map(|actual| count_actual_tests(&actual));
+                .and_then(|source| extract::extract_with_findings(pack, path, &source))
+                .map(|actual| (count_actual_tests(&actual.nodes), actual.unsupported));
             (path.clone(), count)
         })
         .collect();
@@ -174,8 +187,19 @@ pub fn find_uncovered(packs: &[Pack], paths: &[PathBuf], tree_files: &[PathBuf])
     scan.failed.extend(walk_failures);
     for (path, result) in results {
         match result {
-            Ok(tests) if tests > 0 => scan.uncovered.push(Uncovered { path, tests }),
-            Ok(_) => {}
+            Ok((tests, unsupported)) => {
+                if tests > 0 {
+                    scan.uncovered.push(Uncovered {
+                        path: path.clone(),
+                        tests,
+                    });
+                }
+                scan.unsupported
+                    .extend(unsupported.into_iter().map(|finding| UncoveredUnsupported {
+                        path: path.clone(),
+                        line: finding.line,
+                    }));
+            }
             Err(e) => scan.failed.push((path, e)),
         }
     }
@@ -255,10 +279,17 @@ pub fn check_file(
 
     let mapping = &pack.manifest.mapping;
     let expected = check::expected_from_spec(&trees, mapping);
-    let actual = extract::extract(pack, target, &source)?;
-    let actual = check::unwrap_wrappers(actual, &mapping.wrappers);
+    let extracted = extract::extract_with_findings(pack, target, &source)?;
+    let actual = check::unwrap_wrappers(extracted.nodes, &mapping.wrappers);
 
-    let findings = check::diff(&expected, &actual);
+    let mut findings: Vec<_> = extracted
+        .unsupported
+        .into_iter()
+        .map(|finding| Finding::Unsupported {
+            target_line: finding.line,
+        })
+        .collect();
+    findings.extend(check::diff(&expected, &actual));
     Ok(findings
         .into_iter()
         .filter_map(|finding| {
@@ -266,6 +297,7 @@ pub fn check_file(
                 Finding::Missing { .. } => Level::Error,
                 Finding::Extra { .. } => cfg.extra,
                 Finding::OutOfOrder { .. } => cfg.order,
+                Finding::Unsupported { .. } => cfg.unsupported,
             };
             match level {
                 Level::Ignore => None,

@@ -1,6 +1,7 @@
 lexical extraction
 ├── when extracting typescript lexically
-│   └── it matches the native extraction
+│   ├── it matches the native extraction
+│   └── it reports parameterized tests identically
 ├── when decoys hide in comments and strings
 │   └── it matches the native extraction
 ├── when fuzzing random test files

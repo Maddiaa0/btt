@@ -218,6 +218,18 @@ Notes per source:
 | `test_requires_marker` | default `false` | when `true`, a `@test` capture only counts if a `@test.marker` capture directly precedes it among its siblings (Rust's `#[test]`); grammar-backed packs only |
 | `name_syntax` | default `"raw"` | how captured names decode to titles: `"raw"` (the text *is* the name — identifiers) or `"js-string"` (the capture is a JS-style string literal: quotes stripped, escapes decoded, so titles compare by value, not by whatever escaping the file happens to use) |
 
+### Check severities
+
+The `[check]` table controls whether non-missing findings fail, warn, or are
+hidden. Missing expected nodes are always errors.
+
+| field | default | finding |
+|---|---|---|
+| `extra` | `"warn"` | a test or block exists in the source but not the tree |
+| `order` | `"warn"` | sibling order differs between source and tree |
+| `uncovered` | `"warn"` | a test-bearing source file has no tree spec |
+| `unsupported` | `"error"` | extraction recognizes a construct that cannot be represented, such as `test.each` |
+
 `test_requires_marker` is for conventions where the test-defining syntax
 is ambiguous on its own: in Rust *any* `fn` matches the query, and only
 the preceding `#[test]`-like attribute makes it a test. Conventions where
@@ -337,6 +349,7 @@ query using a small capture vocabulary the core understands
 | `@test` | yes | a whole test definition |
 | `@test.name` | yes | the node holding the test's name |
 | `@test.marker` | only with `test_requires_marker` | a node (e.g. an `attribute_item` for `#[test]`) that must directly precede a `@test` among its siblings |
+| `@unsupported` | no | a recognized construct that cannot be represented; only its source line is reported |
 
 Nesting is derived structurally, not from the query: a captured node's
 parent is the smallest captured `@block` that contains it. This one rule

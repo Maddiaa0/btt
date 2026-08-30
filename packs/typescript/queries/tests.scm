@@ -31,3 +31,15 @@
   arguments: (arguments . (string) @test.name)
   (#match? @_test_fn "^(it|test)$")
   (#match? @_test_mod "^(only|skip|fails|todo|fixme|slow|concurrent|sequential)$")) @test
+
+; Parameterized tests/blocks are deliberately not named: their generated
+; cases cannot be represented as explicit tree leaves. Capturing the `.each`
+; member in call position covers both `test.each(table)(...)` and tagged
+; tagged-template calls, while restricting the receiver avoids generic
+; collection `.each` calls.
+(call_expression
+  function: (member_expression
+    object: (identifier) @_each_obj
+    property: (property_identifier) @_each_prop) @unsupported
+  (#match? @_each_obj "^(it|test|describe)$")
+  (#eq? @_each_prop "each"))

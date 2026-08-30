@@ -49,6 +49,9 @@ open = '''(?:^|[^\w$.])(?<kw>(?:describe|suite)(?:\.\w+)?|(?:it|test)\.describe)
 [lexical.test]
 open = '''(?:^|[^\w$.])(?<kw>(?:it|test)(?:\.(?:only|skip|fails|todo|fixme|slow|concurrent|sequential))?)\s*\(\s*(?<name>"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*[,)]'''
 
+[lexical.unsupported]
+open = '''(?:^|[^\w$.])(?:it|test|describe)\.each\s*[(\x60]'''
+
 [mapping]
 # The tree root must appear as a top-level describe block.
 root = "block"

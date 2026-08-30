@@ -139,6 +139,14 @@ pub struct Opener {
     pub open: String,
 }
 
+/// A regex that recognizes a construct without extracting a name or span.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UnsupportedPattern {
+    /// Regex matched against source with comments blanked to whitespace.
+    pub open: String,
+}
+
 /// The lexical profile of a `source = "lexical"` pack: just enough syntax
 /// to tell code from comments and strings, plus what a block and a test
 /// look like. See [`crate::lexical`] for how extraction uses it.
@@ -160,6 +168,9 @@ pub struct Lexical {
     pub block: Opener,
     /// What declares a test.
     pub test: Opener,
+    /// Constructs recognized by the pack but not representable as nodes.
+    #[serde(default)]
+    pub unsupported: Option<UnsupportedPattern>,
 }
 
 /// Grammar section of a pack manifest.

@@ -114,6 +114,29 @@ test.describe("HashMap", () => {
     }
 }
 
+mod when_extracting_parameterized_typescript_tests {
+    use super::*;
+
+    #[test]
+    fn reports_supported_forms_and_ignores_unrelated_each_calls() {
+        let source = "test.each(cases)(\"case %s\", fn);\n\
+it.each`value | expected`(\"case $value\", fn);\n\
+describe.each(cases)(\"group %s\", fn);\n\
+myArray.each(fn);\n\
+holder.test.each(cases)(\"not supported syntax\", fn);\n";
+        let pack = pack::load("typescript", repo_root()).unwrap();
+        let result =
+            extract::extract_with_findings(&pack, Path::new("map.test.ts"), source).unwrap();
+        let lines: Vec<_> = result
+            .unsupported
+            .iter()
+            .map(|finding| finding.line)
+            .collect();
+        assert_eq!(lines, [1, 2, 3]);
+        assert!(result.nodes.is_empty(), "{:?}", result.nodes);
+    }
+}
+
 mod when_scaffolding_from_a_tree {
     use super::*;
 

@@ -98,6 +98,13 @@ pub enum Error {
         message: String,
     },
 
+    /// Safe scaffold merging could not determine an unambiguous insertion.
+    #[error("cannot safely merge scaffold: {message}; merge manually")]
+    Merge {
+        /// Why editing between complete extracted spans was not possible.
+        message: String,
+    },
+
     /// A target pattern that forward and reverse routing would disagree on.
     #[error(
         "pack `{pack}`: target pattern `{pattern}` must contain exactly one {{stem}} and no directory separators"

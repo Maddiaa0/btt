@@ -278,6 +278,13 @@ appearing in any spec tree (`wrappers = ["tests"]`). Extra blocks that are
 | `output` | required | output file-name pattern, `{stem}` substituted; written next to the tree file unless `--output` overrides |
 | `indent` | default four spaces | one indentation unit; the template receives it pre-repeated per depth |
 
+`btt scaffold TREE --merge` extracts the existing routed test file and adds
+template skeletons only for missing leaves and blocks. It preserves every
+existing byte, keeps extra tests for `btt check` to report, and refuses an
+ambiguous or non-line-aligned insertion with a manual-merge error. A repeated
+merge is a byte-for-byte no-op. `--merge` cannot be combined with `--force` or
+`--stdout`.
+
 ## 4. The lexical profile (`[lexical]`)
 
 A `source = "lexical"` pack declares just enough syntax for btt to tell

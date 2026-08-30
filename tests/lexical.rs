@@ -717,6 +717,29 @@ mod when_a_scaffolded_file_is_checked_lexically {
     }
 
     #[test]
+    fn merges_missing_skeletons_idempotently() {
+        let spec = "HashMap\n├── it existing\n└── it new\n";
+        let p = lexical_pack();
+        let expected = check::expected_from_spec(&tree::parse(spec).unwrap(), &p.manifest.mapping);
+        let source = "describe(\"HashMap\", () => {\n  it(\"existing\", () => { expect(true).toBe(true); });\n});\n";
+        let once = scaffold::merge(
+            &p,
+            &expected,
+            Path::new("map.test.ts"),
+            source,
+            "map",
+            false,
+        )
+        .unwrap();
+        let twice =
+            scaffold::merge(&p, &expected, Path::new("map.test.ts"), &once, "map", false).unwrap();
+        assert_eq!(once, twice);
+        assert!(once.contains("  // btt:todo — it new"), "{once}");
+        let actual = extract::extract(&p, Path::new("map.test.ts"), &once).unwrap();
+        assert!(check::diff(&expected, &actual).is_empty(), "{once}");
+    }
+
+    #[test]
     fn reports_todo_markers_identically_to_the_native_backend() {
         let marker = "btt:todo";
         let source = format!(

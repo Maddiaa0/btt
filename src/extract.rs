@@ -63,6 +63,24 @@ pub struct TestSpan {
     pub end: usize,
 }
 
+/// One extracted structural node with its exact source byte span.
+/// Empty blocks are retained so editors can insert between definitions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceNode {
+    /// Block or test.
+    pub kind: ActualKind,
+    /// The identifier / title as written in the source.
+    pub name: String,
+    /// 1-based line of the definition.
+    pub line: usize,
+    /// Inclusive start byte of the complete definition.
+    pub start: usize,
+    /// Exclusive end byte of the complete definition.
+    pub end: usize,
+    /// Nested definitions (always empty for tests).
+    pub children: Vec<SourceNode>,
+}
+
 /// Structural nodes and non-structural diagnostics produced in one pass.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Extraction {
@@ -72,6 +90,10 @@ pub struct Extraction {
     pub unsupported: Vec<Unsupported>,
     /// Source spans of every extracted test.
     pub test_spans: Vec<TestSpan>,
+    /// Unpruned structural nodes carrying exact source spans.
+    pub source_nodes: Vec<SourceNode>,
+    /// Whether the grammar produced error or missing syntax nodes.
+    pub has_parse_errors: bool,
 }
 
 impl ActualNode {
@@ -387,6 +409,7 @@ fn is_module_alias(name: Node<'_>) -> bool {
 }
 
 fn finish_extraction(pack: &Pack, root: Node<'_>, pass: &mut QueryPass) -> Extraction {
+    let has_parse_errors = root.has_error();
     let captures = &mut pass.captures;
 
     // Sort into pre-order (parents before children) and deduplicate: a node
@@ -412,12 +435,15 @@ fn finish_extraction(pack: &Pack, root: Node<'_>, pass: &mut QueryPass) -> Extra
     // whose start lies before the block's end, so one cursor pass builds the
     // whole forest.
     let mut i = 0;
-    let top = build_nodes(captures, &mut i, usize::MAX);
+    let source_nodes = build_source_nodes(captures, &mut i, usize::MAX);
+    let top = actual_nodes(&source_nodes);
     pass.unsupported.sort_by_key(|finding| finding.line);
     Extraction {
         nodes: ActualNode::prune_empty_blocks(top),
         unsupported: std::mem::take(&mut pass.unsupported),
         test_spans,
+        source_nodes,
+        has_parse_errors,
     }
 }
 
@@ -556,27 +582,43 @@ mod wasm {
     }
 }
 
-pub(crate) fn build_nodes(
+pub(crate) fn build_source_nodes(
     captures: &[Capture],
     i: &mut usize,
     parent_end: usize,
-) -> Vec<ActualNode> {
+) -> Vec<SourceNode> {
     let mut out = Vec::new();
     while *i < captures.len() && captures[*i].start < parent_end {
         let c = &captures[*i];
         *i += 1;
         let children = match c.kind {
-            ActualKind::Block => build_nodes(captures, i, c.end),
+            ActualKind::Block => build_source_nodes(captures, i, c.end),
             ActualKind::Test => Vec::new(),
         };
-        out.push(ActualNode {
+        out.push(SourceNode {
             kind: c.kind,
             name: c.name.clone(),
             line: c.line,
+            start: c.start,
+            end: c.end,
             children,
         });
     }
     out
+}
+
+pub(crate) fn actual_nodes(nodes: &[SourceNode]) -> Vec<ActualNode> {
+    ActualNode::prune_empty_blocks(
+        nodes
+            .iter()
+            .map(|node| ActualNode {
+                kind: node.kind,
+                name: node.name.clone(),
+                line: node.line,
+                children: actual_nodes(&node.children),
+            })
+            .collect(),
+    )
 }
 
 fn capture(

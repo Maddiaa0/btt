@@ -44,6 +44,9 @@ enum Command {
         /// Print to stdout instead of writing a file.
         #[arg(long)]
         stdout: bool,
+        /// Add missing skeletons to an existing file without changing bodies.
+        #[arg(long, conflicts_with_all = ["force", "stdout"])]
+        merge: bool,
     },
     /// List available language packs and where they come from.
     Packs,
@@ -98,7 +101,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
             output,
             force,
             stdout,
-        } => cmd_scaffold(&tree, pack, output, force, stdout, &root),
+            merge,
+        } => cmd_scaffold(&tree, pack, output, force, stdout, merge, &root),
         Command::Packs => Ok(cmd_packs(&root)),
         Command::Pack { command } => match command {
             PackCommand::Add { source, dir, git } => {
@@ -497,6 +501,7 @@ fn cmd_scaffold(
     output: Option<PathBuf>,
     force: bool,
     to_stdout: bool,
+    merge: bool,
     root: &Path,
 ) -> Result<ExitCode> {
     let sub_root = config::governing_root(tree_path, root);
@@ -544,13 +549,19 @@ fn cmd_scaffold(
     // more than one (Rust: a `tests/` integration crate is all test code,
     // while anywhere else the template wraps in `#[cfg(test)] mod tests`).
     let in_tests_dir = out_path.components().any(|c| c.as_os_str() == "tests");
-    let rendered = scaffold::render(&pack, &expected, stem, in_tests_dir)?;
+    let rendered = if merge {
+        let existing = std::fs::read_to_string(&out_path)
+            .with_context(|| format!("reading {} for merge", out_path.display()))?;
+        scaffold::merge(&pack, &expected, &out_path, &existing, stem, in_tests_dir)?
+    } else {
+        scaffold::render(&pack, &expected, stem, in_tests_dir)?
+    };
 
     if to_stdout {
         print!("{rendered}");
         return Ok(ExitCode::SUCCESS);
     }
-    if out_path.exists() && !force {
+    if out_path.exists() && !force && !merge {
         bail!(
             "{} already exists (use --force to overwrite, or --stdout to preview)",
             out_path.display()
@@ -559,7 +570,8 @@ fn cmd_scaffold(
     std::fs::write(&out_path, rendered)
         .with_context(|| format!("writing {}", out_path.display()))?;
     println!(
-        "scaffolded {} ({} tests) from {}",
+        "{} {} ({} tests) from {}",
+        if merge { "merged" } else { "scaffolded" },
         out_path.display(),
         runner::count_tests(&expected),
         tree_path.display()

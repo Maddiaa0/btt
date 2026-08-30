@@ -23,6 +23,7 @@ lexical extraction
 │   └── it nests tests by bracket spans
 ├── when a scaffolded file is checked lexically
 │   ├── it reports no findings for hostile titles
+│   ├── it merges missing skeletons idempotently
 │   ├── it reports todo markers identically to the native backend
 │   └── it ignores string literal markers identically to the native backend
 ├── when a lexical profile is malformed

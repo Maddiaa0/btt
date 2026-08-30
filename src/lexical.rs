@@ -38,8 +38,8 @@
 
 use crate::error::{Error, Result};
 use crate::extract::{
-    ActualKind, ActualNode, AliasCandidate, AliasSet, Capture, Extraction, TestSpan, Unsupported,
-    build_nodes, decode_name,
+    ActualKind, AliasCandidate, AliasSet, Capture, Extraction, TestSpan, Unsupported, actual_nodes,
+    build_source_nodes, decode_name,
 };
 use crate::pack::{Lexical, NameSyntax, Pack};
 use regex::Regex;
@@ -161,7 +161,8 @@ pub(crate) fn extract(pack: &Pack, cfg: &Lexical, source: &str) -> Result<Extrac
         })
         .collect();
     let mut i = 0;
-    let top = build_nodes(&captures, &mut i, usize::MAX);
+    let source_nodes = build_source_nodes(&captures, &mut i, usize::MAX);
+    let top = actual_nodes(&source_nodes);
     let unsupported = cfg
         .unsupported
         .as_ref()
@@ -178,9 +179,11 @@ pub(crate) fn extract(pack: &Pack, cfg: &Lexical, source: &str) -> Result<Extrac
         )
         .map_err(err)?;
     Ok(Extraction {
-        nodes: ActualNode::prune_empty_blocks(top),
+        nodes: top,
         unsupported,
         test_spans,
+        source_nodes,
+        has_parse_errors: false,
     })
 }
 

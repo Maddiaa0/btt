@@ -15,6 +15,11 @@ language packs
 ├── when scaffolding from a tree
 │   ├── it renders rust modules and test functions
 │   └── it renders nested describe blocks
+├── when merging a scaffold
+│   ├── it inserts rust leaves and blocks without changing existing bytes
+│   ├── it inserts typescript leaves in sibling order and is idempotent
+│   ├── it fails closed on ambiguous duplicates
+│   └── it fails closed on syntax errors
 ├── when checking scaffold markers
 │   ├── it reports each marker at its source line with the default severity
 │   ├── it clears a finding when its marker is removed

@@ -246,6 +246,113 @@ mod when_scaffolding_from_a_tree {
     }
 }
 
+mod when_merging_a_scaffold {
+    use super::*;
+
+    fn expected(pack: &pack::Pack, spec: &str) -> Vec<check::Expected> {
+        check::expected_from_spec(&tree::parse(spec).unwrap(), &pack.manifest.mapping)
+    }
+
+    #[test]
+    fn inserts_rust_leaves_and_blocks_without_changing_existing_bytes() {
+        let pack = pack::load("rust", repo_root()).unwrap();
+        let spec = "Map\n├── when present\n│   ├── it keeps body\n│   └── it adds leaf\n└── when absent\n    └── it adds block leaf\n";
+        let source = "mod when_present {\n    use super::*;\n\n    #[test]\n    fn keeps_body() {\n        assert_eq!(2 + 2, 4); // precious body\n    }\n}\n";
+        let merged = scaffold::merge(
+            &pack,
+            &expected(&pack, spec),
+            Path::new("tests/map.rs"),
+            source,
+            "map",
+            true,
+        )
+        .unwrap();
+        assert!(merged.contains("        // btt:todo"), "{merged}");
+        assert!(
+            merged.contains("    #[test]\n    fn adds_leaf()"),
+            "{merged}"
+        );
+        assert!(merged.contains("mod when_absent {"), "{merged}");
+        assert!(
+            merged.contains("assert_eq!(2 + 2, 4); // precious body"),
+            "{merged}"
+        );
+        let actual = extract::extract(&pack, Path::new("tests/map.rs"), &merged).unwrap();
+        let findings = check::diff(&expected(&pack, spec), &actual);
+        assert!(findings.is_empty(), "{findings:?}\n{merged}");
+    }
+
+    #[test]
+    fn inserts_typescript_leaves_in_sibling_order_and_is_idempotent() {
+        let pack = pack::load("typescript", repo_root()).unwrap();
+        let spec = "Map\n├── it first\n├── it middle\n└── it last\n";
+        let source = "describe(\"Map\", () => {\n  it(\"first\", () => { expect(1).toBe(1); });\n  // keep this comment exactly here\n  it(\"last\", () => { expect(3).toBe(3); });\n});\n";
+        let once = scaffold::merge(
+            &pack,
+            &expected(&pack, spec),
+            Path::new("map.test.ts"),
+            source,
+            "map",
+            false,
+        )
+        .unwrap();
+        let twice = scaffold::merge(
+            &pack,
+            &expected(&pack, spec),
+            Path::new("map.test.ts"),
+            &once,
+            "map",
+            false,
+        )
+        .unwrap();
+        assert_eq!(once, twice);
+        let first = once.find("first").unwrap();
+        let middle = once.find("middle").unwrap();
+        let last = once.find("last").unwrap();
+        assert!(first < middle && middle < last, "{once}");
+        assert!(once.contains("  // btt:todo — it middle"), "{once}");
+        assert!(
+            once.contains("  // keep this comment exactly here"),
+            "{once}"
+        );
+    }
+
+    #[test]
+    fn fails_closed_on_ambiguous_duplicates() {
+        let pack = pack::load("typescript", repo_root()).unwrap();
+        let spec = "Map\n├── it same\n└── it new\n";
+        let source = "describe(\"Map\", () => {\n  it(\"same\", () => {});\n  it(\"same\", () => {});\n});\n";
+        let error = scaffold::merge(
+            &pack,
+            &expected(&pack, spec),
+            Path::new("map.test.ts"),
+            source,
+            "map",
+            false,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("merge manually"), "{error}");
+    }
+
+    #[test]
+    fn fails_closed_on_syntax_errors() {
+        let pack = pack::load("typescript", repo_root()).unwrap();
+        let spec = "Map\n├── it existing\n└── it new\n";
+        let malformed = "describe(\"Map\", () => {\n  it(\"existing\", () => {});\n";
+        let error = scaffold::merge(
+            &pack,
+            &expected(&pack, spec),
+            Path::new("map.test.ts"),
+            malformed,
+            "map",
+            false,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("syntax errors"), "{error}");
+        assert!(error.to_string().contains("merge manually"), "{error}");
+    }
+}
+
 mod when_checking_scaffold_markers {
     use super::*;
 

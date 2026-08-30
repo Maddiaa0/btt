@@ -4,7 +4,10 @@ use btt::config::{self, Level};
 use btt::extract::ActualKind;
 use btt::runner;
 use btt::{check, pack, scaffold, tree};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+use serde::Serialize;
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -27,6 +30,9 @@ enum Command {
         /// Number of files to check in parallel (default: one per core).
         #[arg(short, long)]
         jobs: Option<NonZeroUsize>,
+        /// Output format.
+        #[arg(long, value_enum, default_value_t)]
+        format: OutputFormat,
     },
     /// Generate a test-file skeleton from a .tree spec.
     Scaffold {
@@ -60,6 +66,13 @@ enum Command {
     },
 }
 
+#[derive(Clone, Copy, Default, ValueEnum)]
+enum OutputFormat {
+    #[default]
+    Human,
+    Json,
+}
+
 #[derive(Subcommand)]
 enum PackCommand {
     /// Add one pack from a local directory or Git repository.
@@ -91,7 +104,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
     let root = config::find_project_root(&cwd);
 
     match cli.command {
-        Command::Check { paths, jobs } => cmd_check(&paths, jobs, &root),
+        Command::Check {
+            paths,
+            jobs,
+            format,
+        } => cmd_check(&paths, jobs, format, &root),
         Command::Scaffold {
             tree,
             pack,
@@ -157,6 +174,89 @@ struct FileReport {
     warnings: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum FindingKind {
+    Missing,
+    Extra,
+    OutOfOrder,
+    Unsupported,
+    Uncovered,
+    NoTarget,
+    CheckFailed,
+    ScanFailed,
+}
+
+#[derive(Serialize)]
+struct JsonFinding {
+    kind: FindingKind,
+    severity: Level,
+    message: String,
+    tree_path: Option<String>,
+    file: String,
+    line: Option<usize>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum JsonStatus {
+    Pass,
+    Fail,
+}
+
+#[derive(Serialize)]
+struct JsonResult {
+    tree: Option<String>,
+    target: Option<String>,
+    status: JsonStatus,
+    findings: Vec<JsonFinding>,
+}
+
+#[derive(Default, Serialize)]
+struct JsonSummary {
+    tree_files: usize,
+    uncovered: usize,
+    errors: usize,
+    warnings: usize,
+    findings: BTreeMap<FindingKind, BTreeMap<Level, usize>>,
+}
+
+#[derive(Serialize)]
+struct JsonReport {
+    summary: JsonSummary,
+    results: Vec<JsonResult>,
+}
+
+impl JsonReport {
+    fn new(tree_files: usize) -> Self {
+        Self {
+            summary: JsonSummary {
+                tree_files,
+                ..JsonSummary::default()
+            },
+            results: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, result: JsonResult) {
+        for finding in &result.findings {
+            *self
+                .summary
+                .findings
+                .entry(finding.kind)
+                .or_default()
+                .entry(finding.severity)
+                .or_default() += 1;
+            match finding.severity {
+                Level::Error => self.summary.errors += 1,
+                Level::Warn => self.summary.warnings += 1,
+                Level::Ignore => {}
+            }
+        }
+        self.results.push(result);
+    }
+}
+
 /// Config and packs governing one subtree (the reach of one `btt.toml`).
 struct Subtree {
     cfg: config::ProjectConfig,
@@ -211,7 +311,12 @@ fn subtree_roots(search: &[PathBuf], tree_files: &[PathBuf], root: &Path) -> Res
     Ok(roots.into_iter().collect())
 }
 
-fn cmd_check(paths: &[PathBuf], jobs: Option<NonZeroUsize>, root: &Path) -> Result<ExitCode> {
+fn cmd_check(
+    paths: &[PathBuf],
+    jobs: Option<NonZeroUsize>,
+    format: OutputFormat,
+    root: &Path,
+) -> Result<ExitCode> {
     let search = if paths.is_empty() {
         vec![root.to_path_buf()]
     } else {
@@ -276,12 +381,27 @@ fn cmd_check(paths: &[PathBuf], jobs: Option<NonZeroUsize>, root: &Path) -> Resu
             scan.uncovered.is_empty() && scan.unsupported.is_empty() && scan.failed.is_empty()
         })
     {
-        println!("no .tree files found");
+        match format {
+            OutputFormat::Human => println!("no .tree files found"),
+            OutputFormat::Json => println!("{}", serde_json::to_string(&JsonReport::new(0))?),
+        }
         return Ok(ExitCode::SUCCESS);
     }
 
+    if matches!(format, OutputFormat::Json) {
+        return render_json(&tree_files, &outcomes, &scans, root);
+    }
+    Ok(render_human(&tree_files, &outcomes, &scans, root))
+}
+
+fn render_human(
+    tree_files: &[PathBuf],
+    outcomes: &[runner::FileOutcome],
+    scans: &[(Level, Level, runner::UncoveredScan)],
+    root: &Path,
+) -> ExitCode {
     let (mut errors, mut warnings) = (0usize, 0usize);
-    for outcome in &outcomes {
+    for outcome in outcomes {
         let report = render(outcome, root);
         errors += report.errors;
         warnings += report.warnings;
@@ -290,7 +410,7 @@ fn cmd_check(paths: &[PathBuf], jobs: Option<NonZeroUsize>, root: &Path) -> Resu
         }
     }
     let mut uncovered = 0usize;
-    for (uncovered_level, unsupported_level, scan) in &scans {
+    for (uncovered_level, unsupported_level, scan) in scans {
         uncovered += scan.uncovered.len();
         let scan_report = render_scan(scan, *uncovered_level, *unsupported_level, root);
         errors += scan_report.errors;
@@ -315,13 +435,196 @@ fn cmd_check(paths: &[PathBuf], jobs: Option<NonZeroUsize>, root: &Path) -> Resu
         || outcomes
             .iter()
             .any(|o| matches!(o.result, runner::FileResult::Failed(_)));
-    Ok(if failed {
+    if failed {
         ExitCode::from(2)
     } else if errors > 0 {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
-    })
+    }
+}
+
+fn shown_path(path: &Path, root: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .display()
+        .to_string()
+}
+
+fn finding_json(reported: &runner::Reported, tree: &Path, target: &Path) -> JsonFinding {
+    let (kind, message, tree_path, file, line) = match &reported.finding {
+        Finding::Missing {
+            path, spec_line, ..
+        } => (
+            FindingKind::Missing,
+            describe(&reported.finding, tree, target),
+            Some(path.clone()),
+            tree.display().to_string(),
+            Some(*spec_line),
+        ),
+        Finding::Extra {
+            path, target_line, ..
+        } => (
+            FindingKind::Extra,
+            describe(&reported.finding, tree, target),
+            Some(path.clone()),
+            target.display().to_string(),
+            Some(*target_line),
+        ),
+        Finding::OutOfOrder { path } => (
+            FindingKind::OutOfOrder,
+            describe(&reported.finding, tree, target),
+            Some(path.clone()),
+            target.display().to_string(),
+            None,
+        ),
+        Finding::Unsupported { target_line } => (
+            FindingKind::Unsupported,
+            describe(&reported.finding, tree, target),
+            None,
+            target.display().to_string(),
+            Some(*target_line),
+        ),
+    };
+    JsonFinding {
+        kind,
+        severity: reported.level,
+        message,
+        tree_path,
+        file,
+        line,
+    }
+}
+
+fn render_json(
+    tree_files: &[PathBuf],
+    outcomes: &[runner::FileOutcome],
+    scans: &[(Level, Level, runner::UncoveredScan)],
+    root: &Path,
+) -> Result<ExitCode> {
+    let mut report = JsonReport::new(tree_files.len());
+    let mut tool_failed = false;
+    for outcome in outcomes {
+        tool_failed |= add_json_outcome(&mut report, outcome, root);
+    }
+    for (uncovered_level, unsupported_level, scan) in scans {
+        tool_failed |= add_json_scan(
+            &mut report,
+            scan,
+            *uncovered_level,
+            *unsupported_level,
+            root,
+        );
+    }
+    let exit = if tool_failed {
+        ExitCode::from(2)
+    } else if report.summary.errors > 0 {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    };
+    println!("{}", serde_json::to_string(&report)?);
+    Ok(exit)
+}
+
+fn add_json_outcome(report: &mut JsonReport, outcome: &runner::FileOutcome, root: &Path) -> bool {
+    let tree = shown_path(&outcome.tree_path, root);
+    let (target, findings, tool_failed) = match &outcome.result {
+        runner::FileResult::Checked { target, findings } => (
+            Some(shown_path(target, root)),
+            findings
+                .iter()
+                .map(|finding| finding_json(finding, Path::new(&tree), target))
+                .collect(),
+            false,
+        ),
+        runner::FileResult::NoTarget { candidates } => {
+            let mut message = "no matching test file".to_string();
+            for candidate in candidates.iter().take(4) {
+                _ = write!(message, "\ntried {}", candidate.display());
+            }
+            _ = write!(message, "\nhint: btt scaffold {tree}");
+            (
+                None,
+                vec![JsonFinding {
+                    kind: FindingKind::NoTarget,
+                    severity: Level::Error,
+                    message,
+                    tree_path: None,
+                    file: tree.clone(),
+                    line: None,
+                }],
+                false,
+            )
+        }
+        runner::FileResult::Failed(error) => (
+            None,
+            vec![JsonFinding {
+                kind: FindingKind::CheckFailed,
+                severity: Level::Error,
+                message: error.to_string(),
+                tree_path: None,
+                file: tree.clone(),
+                line: None,
+            }],
+            true,
+        ),
+    };
+    report.push(JsonResult {
+        tree: Some(tree),
+        target,
+        status: if findings.is_empty() {
+            JsonStatus::Pass
+        } else {
+            JsonStatus::Fail
+        },
+        findings,
+    });
+    tool_failed
+}
+
+fn add_json_scan(
+    report: &mut JsonReport,
+    scan: &runner::UncoveredScan,
+    uncovered_level: Level,
+    unsupported_level: Level,
+    root: &Path,
+) -> bool {
+    report.summary.uncovered += scan.uncovered.len();
+    if uncovered_level != Level::Ignore {
+        for uncovered in &scan.uncovered {
+            report.push(JsonResult { tree: None, target: None, status: JsonStatus::Fail, findings: vec![JsonFinding {
+                kind: FindingKind::Uncovered, severity: uncovered_level,
+                message: format!("{} test(s), not covered by any .tree\nhint: write a .tree next to each file mirroring its tests", uncovered.tests),
+                tree_path: None, file: shown_path(&uncovered.path, root), line: None,
+            }] });
+        }
+    }
+    if unsupported_level != Level::Ignore {
+        for unsupported in &scan.unsupported {
+            report.push(JsonResult { tree: None, target: None, status: JsonStatus::Fail, findings: vec![JsonFinding {
+                kind: FindingKind::Unsupported, severity: unsupported_level,
+                message: "unsupported: parameterized test (test.each) is not representable — expand into explicit leaves (see AGENT-SETUP)".to_string(),
+                tree_path: None, file: shown_path(&unsupported.path, root), line: Some(unsupported.line),
+            }] });
+        }
+    }
+    for (path, error) in &scan.failed {
+        report.push(JsonResult {
+            tree: None,
+            target: None,
+            status: JsonStatus::Fail,
+            findings: vec![JsonFinding {
+                kind: FindingKind::ScanFailed,
+                severity: Level::Error,
+                message: format!("coverage scan failed: {error}"),
+                tree_path: None,
+                file: shown_path(path, root),
+                line: None,
+            }],
+        });
+    }
+    !scan.failed.is_empty()
 }
 
 /// Render the uncovered scan: files needing specs at their configured

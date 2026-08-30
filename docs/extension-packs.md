@@ -532,6 +532,54 @@ $ btt check src
 1 tree file(s), 0 uncovered, 1 error(s), 1 warning(s)
 ```
 
+### Machine-readable check output
+
+`btt check --format json` emits one JSON object and uses the same exit codes
+as the default `--format human` output. For example, CI can read the error
+count without matching display text:
+
+```sh
+btt check --format json | jq .summary.errors
+```
+
+The top-level object has a `summary` and a `results` array. `summary` contains
+`tree_files`, `uncovered`, `errors`, `warnings`, and `findings`; `findings` is
+a map from finding kind to severity counts. Each result contains `tree`, the
+routed `target` when there is one, `status` (`pass` or `fail`), and a
+`findings` array. A finding contains `kind`, `severity`, `message`, the
+logical `tree_path` when applicable, `file`, and its one-based `line` when
+available. Uncovered files and coverage-scan failures are results with a null
+`tree` and `target`.
+
+```json
+{
+  "summary": {
+    "tree_files": 1,
+    "uncovered": 0,
+    "errors": 1,
+    "warnings": 0,
+    "findings": { "unsupported": { "error": 1 } }
+  },
+  "results": [{
+    "tree": "tests/login.tree",
+    "target": "tests/login.test.ts",
+    "status": "fail",
+    "findings": [{
+      "kind": "unsupported",
+      "severity": "error",
+      "message": "unsupported: parameterized test (test.each) is not representable — expand into explicit leaves (see AGENT-SETUP) (tests/login.test.ts:8)",
+      "tree_path": null,
+      "file": "tests/login.test.ts",
+      "line": 8
+    }]
+  }]
+}
+```
+
+The JSON contract is stable: existing fields and meanings will not be
+removed or changed. New finding kinds, severities, and fields may be added,
+so consumers should tolerate additive changes.
+
 A missing/extra *pair* like this is check working as intended. The same
 pair for a test that **is** in both places means extraction and mapping
 disagree — a broken capture (extraction saw the wrong node text) or a

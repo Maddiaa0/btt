@@ -3,4 +3,7 @@ nested configs
     ├── it routes each subtree with its own packs
     ├── it applies the nested check severities
     ├── it applies the nested uncovered severity
-    └── it ignores a broken root pack when checking only a nested subtree
+    ├── it ignores a broken root pack when checking only a nested subtree
+    ├── it preserves the human output byte for byte
+    ├── it emits a structured clean result
+    └── it emits structured findings and preserves the exit code

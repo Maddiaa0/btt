@@ -6,17 +6,23 @@ use btt::config::{CheckConfig, Level};
 use btt::extract::ActualKind;
 use btt::{extract, pack, runner, scaffold, tree};
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn repo_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
 }
 
 const TODO_MARKER: &str = "btt:todo";
+static TODO_FIXTURE_ID: AtomicUsize = AtomicUsize::new(0);
 
 fn check_source(pack_name: &str, source: &str, cfg: CheckConfig) -> Vec<runner::Reported> {
     let dir = repo_root()
         .join("target/todo-marker-fixtures")
-        .join(pack_name);
+        .join(format!(
+            "{pack_name}-{}-{}",
+            std::process::id(),
+            TODO_FIXTURE_ID.fetch_add(1, Ordering::Relaxed)
+        ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let tree_path = dir.join("map.tree");

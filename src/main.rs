@@ -494,6 +494,7 @@ enum FindingKind {
     Extra,
     OutOfOrder,
     Unsupported,
+    Todo,
     Uncovered,
     NoTarget,
     CheckFailed,
@@ -822,6 +823,13 @@ fn finding_json(
         ),
         Finding::Unsupported { target_line } => (
             FindingKind::Unsupported,
+            describe(&reported.finding, tree, target),
+            None,
+            shown_path(target, root),
+            Some(*target_line),
+        ),
+        Finding::Todo { target_line, .. } => (
+            FindingKind::Todo,
             describe(&reported.finding, tree, target),
             None,
             shown_path(target, root),

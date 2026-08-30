@@ -180,6 +180,37 @@ mod when_checking_a_monorepo_from_the_root {
     }
 
     #[test]
+    fn emits_todo_findings_and_counts_in_json() {
+        let root = fixture("json-todo");
+        std::fs::write(
+            root.join("web/map.test.ts"),
+            "describe(\"map\", () => {\n  describe(\"when queried\", () => {\n    it(\"returns the value\", () => {\n      // btt:todo — it returns the value\n    });\n  });\n});\n",
+        )
+        .unwrap();
+
+        let (code, stdout) = check_args(&root, &["check", "--format", "json"]);
+        assert_eq!(code, 0, "{stdout}");
+        let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(json["summary"]["warnings"], 1);
+        assert_eq!(json["summary"]["findings"]["todo"]["warn"], 1);
+        let todo = json["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|result| result["findings"].as_array().unwrap())
+            .find(|finding| finding["kind"] == "todo")
+            .unwrap();
+        assert_eq!(todo["severity"], "warn");
+        assert_eq!(todo["file"], "web/map.test.ts");
+        assert_eq!(todo["line"], 4);
+        assert!(
+            todo["message"]
+                .as_str()
+                .is_some_and(|message| message.starts_with("todo: test body never filled in"))
+        );
+    }
+
+    #[test]
     fn emits_json_for_setup_failures() {
         for (name, config) in [
             ("invalid-config", "not valid toml = ["),

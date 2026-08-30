@@ -570,8 +570,10 @@ a map from finding kind to severity counts. Each result contains `tree`, the
 routed `target` when there is one, `status` (`pass` or `fail`), and a
 `findings` array. A finding contains `kind`, `severity`, `message`, the
 logical `tree_path` when applicable, `file`, and its one-based `line` when
-available. Uncovered files and coverage-scan failures are results with a null
-`tree` and `target`.
+available. This includes `todo` findings for surviving `btt:todo` scaffold
+markers; they use the configured `todo` severity and report the marker's source
+file and line. Uncovered files and coverage-scan failures are results with a
+null `tree` and `target`.
 
 If setup fails before files can be checked (for example, an invalid
 `btt.toml` or missing configured pack), the command still writes exactly one

@@ -7,4 +7,5 @@ nested configs
     ├── it preserves the human output byte for byte
     ├── it emits a structured clean result
     ├── it emits structured findings and preserves the exit code
+    ├── it emits todo findings and counts in JSON
     └── it emits JSON for setup failures

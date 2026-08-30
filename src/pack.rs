@@ -133,9 +133,11 @@ pub struct Opener {
     /// whitespace. Must define `(?<kw>...)` on the keyword (must land on
     /// real code) and `(?<name>...)` on the name — a string literal
     /// including its quotes for `name_syntax = "js-string"`, a code
-    /// identifier for `"raw"`. The pattern must also include the
-    /// definition's opening bracket (the call's `(`, a body's `{`): its
-    /// matching closer bounds the definition's span for nesting.
+    /// identifier for `"raw"`. `(?<span>...)` must capture exactly the
+    /// definition's opening bracket (the call's `(`, a body's `{`); its
+    /// matching closer bounds the definition's span for nesting. Making
+    /// this explicit avoids choosing an earlier bracket in constructs such
+    /// as `contract Child is Base(1) {`.
     pub open: String,
 }
 

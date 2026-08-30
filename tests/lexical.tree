@@ -10,7 +10,10 @@ lexical extraction
 ├── when fuzzing random rust files
 │   └── it never diverges from the native extraction
 ├── when a raw name profile extracts declarations
-│   └── it nests tests by bracket spans
+│   ├── it nests tests by explicit bracket spans
+│   └── it preserves line breaks while blanking comments
+├── when source uses syntax outside the profile
+│   └── it documents possible silent divergence
 ├── when a scaffolded file is checked lexically
 │   └── it reports no findings for hostile titles
 ├── when a lexical profile is malformed

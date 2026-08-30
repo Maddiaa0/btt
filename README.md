@@ -91,12 +91,6 @@ macOS and Linux:
 $ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/Maddiaa0/btt/releases/latest/download/btt-cli-installer.sh | sh
 ```
 
-Windows PowerShell:
-
-```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/Maddiaa0/btt/releases/latest/download/btt-cli-installer.ps1 | iex"
-```
-
 Package managers:
 
 ```console

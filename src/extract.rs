@@ -19,6 +19,7 @@
 
 use crate::error::{Error, Result};
 use crate::pack::{self, NameSyntax, Pack};
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
 
@@ -110,8 +111,157 @@ pub fn extract_with_findings(pack: &Pack, target: &Path, source: &str) -> Result
         return crate::lexical::extract(pack, cfg, source);
     }
     let (tree, language) = parse_source(pack, target, source)?;
+    let empty = AliasSet::default();
+    let initial_text = empty.substitute(&pack.query);
+    let initial = run_query(pack, &language, &tree, source, &initial_text)?;
+    let aliases = AliasSet::resolve(&initial.candidates);
+    let mut pass = if aliases.is_empty() {
+        initial
+    } else {
+        // Candidate collection is static, and transitive resolution happens
+        // entirely in memory. Thus alias support costs at most one extra
+        // query compilation per file, regardless of chain length.
+        run_query(
+            pack,
+            &language,
+            &tree,
+            source,
+            &aliases.substitute(&pack.query),
+        )?
+    };
+    Ok(finish_extraction(pack, tree.root_node(), &mut pass))
+}
 
-    let query = Query::new(&language, &pack.query).map_err(|source| Error::Query {
+#[derive(Debug, Default)]
+pub(crate) struct AliasSet {
+    blocks: BTreeSet<String>,
+    tests: BTreeSet<String>,
+}
+
+#[derive(Debug)]
+pub(crate) struct AliasCandidate {
+    pub(crate) name: String,
+    pub(crate) value: String,
+}
+
+impl AliasSet {
+    pub(crate) fn substitute(&self, pattern: &str) -> String {
+        pattern
+            .replace("{{block_aliases}}", &Self::alternation(&self.blocks))
+            .replace("{{test_aliases}}", &Self::alternation(&self.tests))
+            .replace(
+                "{{each_aliases}}",
+                &Self::alternation(&self.each_receivers()),
+            )
+    }
+
+    fn alternation(names: &BTreeSet<String>) -> String {
+        if names.is_empty() {
+            // A contradictory pair of anchors, valid in both tree-sitter's
+            // regex predicates and Rust regex, and impossible for an identifier.
+            return r"$^".to_string();
+        }
+        names
+            .iter()
+            .map(|name| regex::escape(name))
+            .collect::<Vec<_>>()
+            .join("|")
+    }
+
+    fn each_receivers(&self) -> BTreeSet<String> {
+        self.blocks.union(&self.tests).cloned().collect()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.blocks.is_empty() && self.tests.is_empty()
+    }
+
+    pub(crate) fn resolve(candidates: &[AliasCandidate]) -> Self {
+        let by_name: HashMap<&str, &str> = candidates
+            .iter()
+            .map(|candidate| (candidate.name.as_str(), candidate.value.as_str()))
+            .collect();
+        let mut out = Self::default();
+        let mut resolved = HashMap::new();
+        for candidate in candidates {
+            let mut visiting = BTreeSet::new();
+            match resolve_name(
+                candidate.name.as_str(),
+                &by_name,
+                &mut resolved,
+                &mut visiting,
+            ) {
+                Some(ActualKind::Block) => {
+                    out.blocks.insert(candidate.name.clone());
+                }
+                Some(ActualKind::Test) => {
+                    out.tests.insert(candidate.name.clone());
+                }
+                None => {}
+            }
+        }
+        out
+    }
+}
+
+fn resolve_name<'a>(
+    name: &'a str,
+    candidates: &HashMap<&'a str, &'a str>,
+    resolved: &mut HashMap<&'a str, Option<ActualKind>>,
+    visiting: &mut BTreeSet<String>,
+) -> Option<ActualKind> {
+    if let Some(kind) = resolved.get(name) {
+        return *kind;
+    }
+    if !visiting.insert(name.to_string()) {
+        return None;
+    }
+    let kind = candidates
+        .get(name)
+        .and_then(|value| resolve_value(value, candidates, resolved, visiting));
+    visiting.remove(name);
+    resolved.insert(name, kind);
+    kind
+}
+
+fn resolve_value<'a>(
+    value: &str,
+    candidates: &HashMap<&'a str, &'a str>,
+    resolved: &mut HashMap<&'a str, Option<ActualKind>>,
+    visiting: &mut BTreeSet<String>,
+) -> Option<ActualKind> {
+    let compact: String = value.chars().filter(|c| !c.is_whitespace()).collect();
+    if let Some((_, arms)) = compact.split_once('?') {
+        let (left, right) = arms.split_once(':')?;
+        let a = resolve_value(left, candidates, resolved, visiting)?;
+        return (resolve_value(right, candidates, resolved, visiting)? == a).then_some(a);
+    }
+    let root = compact.split('.').next()?;
+    match root {
+        "describe" | "suite" => Some(ActualKind::Block),
+        "it" | "test" if compact.ends_with(".describe") => Some(ActualKind::Block),
+        "it" | "test" => Some(ActualKind::Test),
+        alias => candidates
+            .get_key_value(alias)
+            .and_then(|(&known, _)| resolve_name(known, candidates, resolved, visiting)),
+    }
+}
+
+struct QueryPass {
+    captures: Vec<Capture>,
+    markers: Vec<(usize, usize)>,
+    unsupported: Vec<Unsupported>,
+    candidates: Vec<AliasCandidate>,
+}
+
+fn run_query(
+    pack: &Pack,
+    language: &tree_sitter::Language,
+    tree: &tree_sitter::Tree,
+    source: &str,
+    query_text: &str,
+) -> Result<QueryPass> {
+    let query = Query::new(language, query_text).map_err(|source| Error::Query {
         pack: pack.name().to_string(),
         source: Box::new(source),
     })?;
@@ -129,6 +279,8 @@ pub fn extract_with_findings(pack: &Pack, target: &Path, source: &str) -> Result
     };
     let marker_i = idx_of("test.marker");
     let unsupported_i = idx_of("unsupported");
+    let alias_name_i = idx_of("alias.name");
+    let alias_value_i = idx_of("alias.value");
     if pack.manifest.extract.test_requires_marker && marker_i.is_none() {
         return Err(Error::MissingMarkerCapture {
             pack: pack.name().to_string(),
@@ -138,6 +290,7 @@ pub fn extract_with_findings(pack: &Pack, target: &Path, source: &str) -> Result
     let mut captures: Vec<Capture> = Vec::new();
     let mut marker_ranges: Vec<(usize, usize)> = Vec::new(); // (start, end) bytes
     let mut unsupported = Vec::new();
+    let mut candidates = Vec::new();
     let syntax = pack.manifest.extract.name_syntax;
 
     let mut cursor = QueryCursor::new();
@@ -166,7 +319,31 @@ pub fn extract_with_findings(pack: &Pack, target: &Path, source: &str) -> Result
                 line: n.start_position().row + 1,
             });
         }
+        if let (Some(name_i), Some(value_i)) = (alias_name_i, alias_value_i)
+            && let (Some(name), Some(value)) = (node_for(name_i), node_for(value_i))
+            && name
+                .parent()
+                .and_then(|declarator| declarator.parent())
+                .and_then(|declaration| declaration.parent())
+                .is_some_and(|parent| parent.kind() == "program")
+        {
+            candidates.push(AliasCandidate {
+                name: source[name.byte_range()].to_string(),
+                value: source[value.byte_range()].to_string(),
+            });
+        }
     }
+
+    Ok(QueryPass {
+        captures,
+        markers: marker_ranges,
+        unsupported,
+        candidates,
+    })
+}
+
+fn finish_extraction(pack: &Pack, root: Node<'_>, pass: &mut QueryPass) -> Extraction {
+    let captures = &mut pass.captures;
 
     // Sort into pre-order (parents before children) and deduplicate: a node
     // can appear in multiple query matches.
@@ -174,21 +351,19 @@ pub fn extract_with_findings(pack: &Pack, target: &Path, source: &str) -> Result
     captures.dedup_by_key(|c| (c.start, c.end, c.kind));
 
     if pack.manifest.extract.test_requires_marker {
-        captures.retain(|c| {
-            c.kind != ActualKind::Test || has_marker(tree.root_node(), c, &marker_ranges)
-        });
+        captures.retain(|c| c.kind != ActualKind::Test || has_marker(root, c, &pass.markers));
     }
 
     // In pre-order, a block's descendants are exactly the following captures
     // whose start lies before the block's end, so one cursor pass builds the
     // whole forest.
     let mut i = 0;
-    let top = build_nodes(&captures, &mut i, usize::MAX);
-    unsupported.sort_by_key(|finding| finding.line);
-    Ok(Extraction {
+    let top = build_nodes(captures, &mut i, usize::MAX);
+    pass.unsupported.sort_by_key(|finding| finding.line);
+    Extraction {
         nodes: ActualNode::prune_empty_blocks(top),
-        unsupported,
-    })
+        unsupported: std::mem::take(&mut pass.unsupported),
+    }
 }
 
 /// Parse a source file with the pack's grammar, returning the syntax tree

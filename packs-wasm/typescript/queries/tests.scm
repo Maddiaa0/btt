@@ -6,7 +6,7 @@
   function: [(identifier) @_block_fn
              (member_expression object: (identifier) @_block_fn)]
   arguments: (arguments . (string) @block.name)
-  (#match? @_block_fn "^(describe|suite)$")) @block
+  (#match? @_block_fn "^(describe|suite|{{block_aliases}})$")) @block
 
 (call_expression
   function: (member_expression
@@ -20,7 +20,7 @@
 (call_expression
   function: (identifier) @_test_fn
   arguments: (arguments . (string) @test.name)
-  (#match? @_test_fn "^(it|test)$")) @test
+  (#match? @_test_fn "^(it|test|{{test_aliases}})$")) @test
 
 ; Test modifiers: it.only / test.skip / it.fails / test.todo / ... — the
 ; property is constrained so test.describe stays a block, not a test.
@@ -29,7 +29,7 @@
     object: (identifier) @_test_fn
     property: (property_identifier) @_test_mod)
   arguments: (arguments . (string) @test.name)
-  (#match? @_test_fn "^(it|test)$")
+  (#match? @_test_fn "^(it|test|{{test_aliases}})$")
   (#match? @_test_mod "^(only|skip|fails|todo|fixme|slow|concurrent|sequential)$")) @test
 
 ; Parameterized tests/blocks are deliberately not named: their generated
@@ -41,5 +41,14 @@
   function: (member_expression
     object: (identifier) @_each_obj
     property: (property_identifier) @_each_prop) @unsupported
-  (#match? @_each_obj "^(it|test|describe)$")
+  (#match? @_each_obj "^(it|test|describe|{{each_aliases}})$")
   (#eq? @_each_prop "each"))
+
+; Alias support is deliberately module-only. This static query collects all
+; direct program bindings once; the core resolves chains/cycles in memory and
+; compiles at most one alias-expanded query for the file.
+(program
+  (lexical_declaration
+    (variable_declarator
+      name: (identifier) @alias.name
+      value: (_) @alias.value)))

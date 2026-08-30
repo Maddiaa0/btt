@@ -4,6 +4,12 @@ lexical extraction
 │   └── it reports parameterized tests identically
 ├── when decoys hide in comments and strings
 │   └── it matches the native extraction
+├── when aliases bind describe and it
+│   ├── it matches the native extraction
+│   ├── it reports aliased each identically
+│   ├── it resolves a one hundred link chain identically
+│   ├── it drops source derived patterns between files
+│   └── it ignores non module aliases identically
 ├── when fuzzing random test files
 │   └── it never diverges from the native extraction
 ├── when extracting rust lexically

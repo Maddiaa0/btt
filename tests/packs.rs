@@ -135,6 +135,63 @@ holder.test.each(cases)(\"not supported syntax\", fn);\n";
         assert_eq!(lines, [1, 2, 3]);
         assert!(result.nodes.is_empty(), "{:?}", result.nodes);
     }
+
+    #[test]
+    fn reports_each_through_a_test_alias() {
+        let source = "const t = test;\nt.each(cases)(\"case\", fn);\n";
+        let pack = pack::load("typescript", repo_root()).unwrap();
+        let result =
+            extract::extract_with_findings(&pack, Path::new("map.test.ts"), source).unwrap();
+        assert_eq!(
+            result
+                .unsupported
+                .iter()
+                .map(|finding| finding.line)
+                .collect::<Vec<_>>(),
+            [2]
+        );
+    }
+}
+
+mod when_resolving_typescript_aliases {
+    use super::*;
+    use std::fmt::Write;
+
+    #[test]
+    fn resolves_direct_conditional_and_transitive_aliases() {
+        let source = r#"
+const d = flag ? describe : describe.skip;
+const d2 = d;
+const t = it;
+d2("HashMap", () => {
+  d("when the key is present", () => { t("returns the value", () => {}); });
+  describe("when the key is absent", () => { it("returns none", () => {}); });
+});
+"#;
+        assert!(ts_findings(source).is_empty());
+    }
+
+    #[test]
+    fn bounds_a_one_hundred_link_chain() {
+        let mut source = String::from("const a0 = describe;\n");
+        for i in 1..=100 {
+            let _ = writeln!(source, "const a{i} = a{};", i - 1);
+        }
+        source.push_str("a100(\"HashMap\", () => { describe(\"when the key is present\", () => { it(\"returns the value\", f); }); describe(\"when the key is absent\", () => { it(\"returns none\", f); }); });");
+        assert!(ts_findings(&source).is_empty());
+    }
+
+    #[test]
+    fn ignores_aliases_outside_module_scope() {
+        let source =
+            "function bind() { const d = describe; }\nd(\"HashMap\", () => { it(\"ghost\", f); });";
+        let pack = pack::load("typescript", repo_root()).unwrap();
+        let actual = extract::extract(&pack, Path::new("map.test.ts"), source).unwrap();
+        assert!(
+            actual.iter().all(|node| node.kind != ActualKind::Block),
+            "{actual:?}"
+        );
+    }
 }
 
 mod when_scaffolding_from_a_tree {

@@ -147,6 +147,14 @@ pub struct UnsupportedPattern {
     pub open: String,
 }
 
+/// A regex that collects module-level alias binding candidates.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AliasPattern {
+    /// Must capture the bound identifier as `name` and initializer as `value`.
+    pub open: String,
+}
+
 /// The lexical profile of a `source = "lexical"` pack: just enough syntax
 /// to tell code from comments and strings, plus what a block and a test
 /// look like. See [`crate::lexical`] for how extraction uses it.
@@ -168,6 +176,9 @@ pub struct Lexical {
     pub block: Opener,
     /// What declares a test.
     pub test: Opener,
+    /// Candidate alias declarations. Resolution is performed in memory.
+    #[serde(default)]
+    pub alias: Option<AliasPattern>,
     /// Constructs recognized by the pack but not representable as nodes.
     #[serde(default)]
     pub unsupported: Option<UnsupportedPattern>,

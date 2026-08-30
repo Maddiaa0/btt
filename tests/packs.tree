@@ -6,7 +6,12 @@ language packs
 ├── when checking a playwright style file
 │   └── it treats test describe as a block
 ├── when extracting parameterized typescript tests
-│   └── it reports supported forms and ignores unrelated each calls
+│   ├── it reports supported forms and ignores unrelated each calls
+│   └── it reports each through a test alias
+├── when resolving typescript aliases
+│   ├── it resolves direct conditional and transitive aliases
+│   ├── it bounds a one hundred link chain
+│   └── it ignores aliases outside module scope
 ├── when scaffolding from a tree
 │   ├── it renders rust modules and test functions
 │   └── it renders nested describe blocks

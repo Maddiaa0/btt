@@ -32,15 +32,18 @@
 //! brackets, unterminated strings or comments) are tool errors, never
 //! silent partial extractions. `tests/lexical.rs` differentially fuzzes
 //! the typescript profile against the native grammar.
+//! TypeScript alias declarations are intentionally recognized only at
+//! module top level; this conservative boundary is shared with the native
+//! backend and avoids treating function-local bindings as global callees.
 
 use crate::error::{Error, Result};
 use crate::extract::{
-    ActualKind, ActualNode, Capture, Extraction, Unsupported, build_nodes, decode_name,
+    ActualKind, ActualNode, AliasCandidate, AliasSet, Capture, Extraction, Unsupported,
+    build_nodes, decode_name,
 };
 use crate::pack::{Lexical, NameSyntax, Pack};
 use regex::Regex;
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
 
 /// What a byte of source belongs to, per the pack's lexical profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,7 +79,8 @@ pub(crate) fn validate_profile(cfg: &Lexical) -> std::result::Result<(), String>
     }
     bracket_pairs(cfg)?;
     for (which, opener) in [("block", &cfg.block), ("test", &cfg.test)] {
-        let re = compiled(&opener.open).map_err(|e| format!("[lexical.{which}] {e}"))?;
+        let re = compiled(&AliasSet::default().substitute(&opener.open))
+            .map_err(|e| format!("[lexical.{which}] {e}"))?;
         for group in ["kw", "name"] {
             if !re.capture_names().any(|n| n == Some(group)) {
                 return Err(format!(
@@ -85,8 +89,19 @@ pub(crate) fn validate_profile(cfg: &Lexical) -> std::result::Result<(), String>
             }
         }
     }
+    if let Some(pattern) = &cfg.alias {
+        let re = compiled(&pattern.open).map_err(|e| format!("[lexical.alias] {e}"))?;
+        for group in ["name", "value"] {
+            if !re.capture_names().any(|name| name == Some(group)) {
+                return Err(format!(
+                    "[lexical.alias] open must define a (?<{group}>...) group"
+                ));
+            }
+        }
+    }
     if let Some(pattern) = &cfg.unsupported {
-        compiled(&pattern.open).map_err(|e| format!("[lexical.unsupported] {e}"))?;
+        compiled(&AliasSet::default().substitute(&pattern.open))
+            .map_err(|e| format!("[lexical.unsupported] {e}"))?;
     }
     Ok(())
 }
@@ -105,6 +120,15 @@ pub(crate) fn extract(pack: &Pack, cfg: &Lexical, source: &str) -> Result<Extrac
     let brackets = match_brackets(source.as_bytes(), &states, &pairs)
         .map_err(|(pos, what)| err(located(pos, what)))?;
     let haystack = blank_comments(source, &states);
+    let candidates = cfg
+        .alias
+        .as_ref()
+        .map_or_else(
+            || Ok(Vec::new()),
+            |pattern| collect_aliases(&pattern.open, &haystack, &states),
+        )
+        .map_err(err)?;
+    let aliases = AliasSet::resolve(&candidates);
 
     let mut captures: Vec<Capture> = Vec::new();
     for (kind, pattern) in [
@@ -112,7 +136,14 @@ pub(crate) fn extract(pack: &Pack, cfg: &Lexical, source: &str) -> Result<Extrac
         (ActualKind::Test, cfg.test.open.as_str()),
     ] {
         collect(
-            kind, pattern, pack, source, &haystack, &states, &brackets, &pairs,
+            kind,
+            &aliases.substitute(pattern),
+            pack,
+            source,
+            &haystack,
+            &states,
+            &brackets,
+            &pairs,
         )
         .map(|found| captures.extend(found))
         .map_err(err)?;
@@ -127,13 +158,65 @@ pub(crate) fn extract(pack: &Pack, cfg: &Lexical, source: &str) -> Result<Extrac
         .as_ref()
         .map_or_else(
             || Ok(Vec::new()),
-            |pattern| collect_unsupported(&pattern.open, source, &haystack, &states),
+            |pattern| {
+                collect_unsupported(
+                    &aliases.substitute(&pattern.open),
+                    source,
+                    &haystack,
+                    &states,
+                )
+            },
         )
         .map_err(err)?;
     Ok(Extraction {
         nodes: ActualNode::prune_empty_blocks(top),
         unsupported,
     })
+}
+
+/// Collect all syntactic candidates once. Curly-brace depth zero is the
+/// lexical backend's conservative module-scope rule; native uses a direct
+/// `program -> lexical_declaration` query for the identical boundary.
+fn collect_aliases(
+    pattern: &str,
+    haystack: &str,
+    states: &[State],
+) -> std::result::Result<Vec<AliasCandidate>, String> {
+    let re = compiled(pattern)?;
+    let index = |want: &str| {
+        re.capture_names()
+            .position(|name| name == Some(want))
+            .ok_or_else(|| format!("alias pattern must define a (?<{want}>...) group"))
+    };
+    let (name_i, value_i) = (index("name")?, index("value")?);
+    let mut curly_depth = vec![0_usize; haystack.len() + 1];
+    let mut depth = 0_usize;
+    for (at, byte) in haystack.bytes().enumerate() {
+        curly_depth[at] = depth;
+        if states[at] == State::Code {
+            match byte {
+                b'{' => depth += 1,
+                b'}' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for captures in re.captures_iter(haystack) {
+        let (Some(name), Some(value)) = (captures.get(name_i), captures.get(value_i)) else {
+            continue;
+        };
+        if curly_depth[name.start()] == 0
+            && states.get(name.start()) == Some(&State::Code)
+            && states.get(value.start()) == Some(&State::Code)
+        {
+            out.push(AliasCandidate {
+                name: name.as_str().to_string(),
+                value: value.as_str().to_string(),
+            });
+        }
+    }
+    Ok(out)
 }
 
 /// Collect line-only findings whose match contains real, non-trivia code.
@@ -361,18 +444,10 @@ fn collect(
     Ok(out)
 }
 
-/// Compile an opener pattern once per process; extraction runs per file,
-/// and regex compilation would otherwise dominate a scan of many files.
+/// Compile for the current operation only. In particular, source-derived
+/// alias-expanded patterns never enter a process-global cache.
 fn compiled(pattern: &str) -> std::result::Result<Regex, String> {
-    static CACHE: OnceLock<Mutex<HashMap<String, Regex>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(Mutex::default);
-    let mut cache = cache.lock().expect("regex cache poisoned");
-    if let Some(re) = cache.get(pattern) {
-        return Ok(re.clone());
-    }
-    let re = Regex::new(pattern).map_err(|e| format!("invalid opener pattern: {e}"))?;
-    cache.insert(pattern.to_string(), re.clone());
-    Ok(re)
+    Regex::new(pattern).map_err(|e| format!("invalid opener pattern: {e}"))
 }
 
 /// 1-based line number of a byte offset (always a char boundary: regex

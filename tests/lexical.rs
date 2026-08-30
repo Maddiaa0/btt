@@ -131,6 +131,61 @@ describe("real", () => {
     }
 }
 
+mod when_aliases_bind_describe_and_it {
+    use super::*;
+    use std::fmt::Write;
+
+    #[test]
+    fn matches_the_native_extraction() {
+        assert_equivalent(
+            r#"
+const d = flag ? describe : describe.skip;
+const d2 = d;
+const t = it;
+d2("suite", () => { d("nested", () => { t("works", f); }); });
+"#,
+        );
+    }
+
+    #[test]
+    fn reports_aliased_each_identically() {
+        assert_equivalent("const t = test;\nt.each(cases)(\"case\", fn);\n");
+    }
+
+    #[test]
+    fn resolves_a_one_hundred_link_chain_identically() {
+        let mut source = String::from("const a0 = describe;\n");
+        for i in 1..=100 {
+            let _ = writeln!(source, "const a{i} = a{};", i - 1);
+        }
+        source.push_str("a100(\"suite\", () => { it(\"works\", f); });");
+        assert_equivalent(&source);
+    }
+
+    #[test]
+    fn drops_source_derived_patterns_between_files() {
+        let pack = lexical_pack();
+        for i in 0..100 {
+            let source = format!(
+                "const alias{i} = describe;\nalias{i}(\"suite {i}\", () => {{ it(\"works\", f); }});"
+            );
+            let actual = extract::extract(&pack, Path::new("map.test.ts"), &source).unwrap();
+            let expected = format!("suite {i}");
+            assert_eq!(
+                actual.first().map(|node| node.name.as_str()),
+                Some(expected.as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn ignores_non_module_aliases_identically() {
+        assert_equivalent(
+            "function bind() { const d = describe; }\nd(\"ghost\", () => { it(\"nope\", f); });",
+        );
+    }
+}
+
 mod when_fuzzing_random_test_files {
     use super::*;
 

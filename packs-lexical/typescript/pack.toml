@@ -44,13 +44,18 @@ nest = [["(", ")"], ["{", "}"]]
 # non-literal titles ("a" + x), which the native query's first-argument
 # anchor also rejects.
 [lexical.block]
-open = '''(?:^|[^\w$.])(?<kw>(?:describe|suite)(?:\.\w+)?|(?:it|test)\.describe)\s*\(\s*(?<name>"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*[,)]'''
+open = '''(?:^|[^\w$.])(?<kw>(?:describe|suite|{{block_aliases}})(?:\.\w+)?|(?:it|test)\.describe)\s*\(\s*(?<name>"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*[,)]'''
 
 [lexical.test]
-open = '''(?:^|[^\w$.])(?<kw>(?:it|test)(?:\.(?:only|skip|fails|todo|fixme|slow|concurrent|sequential))?)\s*\(\s*(?<name>"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*[,)]'''
+open = '''(?:^|[^\w$.])(?<kw>(?:it|test|{{test_aliases}})(?:\.(?:only|skip|fails|todo|fixme|slow|concurrent|sequential))?)\s*\(\s*(?<name>"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*[,)]'''
+
+[lexical.alias]
+# Candidates are gathered in one scan, then resolved transitively in memory.
+# Extraction accepts only matches at curly-brace depth zero (module scope).
+open = '''(?:^|[^\w$])(?:const|let|var)\s+(?<name>[A-Za-z_$][\w$]*)(?:\s*:[^=;\n]+)?\s*=\s*(?<value>[^;\n]+)\s*[;\n]'''
 
 [lexical.unsupported]
-open = '''(?:^|[^\w$.])(?:it|test|describe)\.each\s*[(\x60]'''
+open = '''(?:^|[^\w$.])(?:it|test|describe|{{each_aliases}})\.each\s*[(\x60]'''
 
 [mapping]
 # The tree root must appear as a top-level describe block.

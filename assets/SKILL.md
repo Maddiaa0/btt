@@ -7,9 +7,28 @@ description: Branch tree testing (BTT) workflow. Use whenever writing, modifying
 
 This project specifies test suites as **`.tree` files** (the bulloak
 given/when/it format, generalized to every language). The tree is the source
-of truth for what a test file contains; `btt check` enforces it.
+of truth for what a test file contains; `btt check` enforces it. It is shared
+language between worker, reviewer, and manager.
 
-## The workflow — spec first, always
+## Test tiers
+
+- **Unit:** the default, per-module tree beside its test file.
+- **Integration:** one tree per integration surface, such as
+  `tests/api.tree` ↔ `tests/api.rs`, describing cross-module behavior. btt
+  dogfoods this pattern with its own `tests/*.tree` files.
+- **Invariants:** a dedicated `invariants.tree` whose leaves are
+  must-never-break properties, mapped to integration/property tests. If a
+  guarantee matters enough to state in a PR description, it belongs as a leaf.
+
+```text
+Booking invariants
+├── it rejects a double-submitted booking
+├── it never allocates one seat to two customers
+├── it preserves the charged total after confirmation
+└── it releases inventory when payment fails
+```
+
+## Worker protocol
 
 1. **Write or update the `.tree` file first.** Enumerate the branches of the
    behavior (`when` / `given` conditions) and the observable outcomes (`it`
@@ -25,6 +44,34 @@ of truth for what a test file contains; `btt check` enforces it.
    Missing tests are errors; extra tests and ordering drift are warnings.
    Fix by updating the tree (if behavior legitimately changed) or the tests —
    never by deleting spec lines just to silence the check.
+
+Expand parameterized (`test.each`/`it.each`) cases into explicit named leaves:
+one leaf per behavioral distinction; collapse pure data-point repetition into
+one representative leaf.
+
+```text
+Before: test.each([valid Visa, valid Amex, expired Visa])
+After:  ├── it accepts a representative valid card
+        └── it rejects an expired card
+```
+
+## Reviewer protocol
+
+- Read `.tree` files **first** as the behavior inventory.
+- Report missing behavior as a `MISSING BRANCH` named in tree syntax.
+- Audit whether the change's tree-diff matches its claimed scope.
+
+## Fix-round + manager protocol
+
+- On review findings, convert each accepted finding into named tree branches
+  **before** touching code; report completion as the tree-diff.
+- Manager verification ladder: (a) btt check green — the tree is a faithful
+  index; (b) read the tree-diff — the behavioral delta; (c) read the new leaf
+  bodies — assertion strength; (d) read the load-bearing code hunks; (e)
+  behavioral smoke test.
+- `N trees, 0 uncovered, 0 errors` is the reporting contract: workers quote
+  it, managers reproduce it.
+- The green check SCOPES the reading, it never replaces it.
 
 ## .tree format
 

@@ -32,8 +32,12 @@ test code is checked against) from this repo:
 
 4. Show me it works: pick one small, well-understood test file in the
    project and write a .tree spec for it (same stem, next to the tests —
-   see SKILL.md for the format), then run `btt check` and walk me through
-   the output. Fix any findings it reports, or explain them.
+   see the installed SKILL.md for the full worker/reviewer/manager protocols).
+   Explain that trees cover per-module unit tests, integration surfaces
+   (e.g. tests/api.tree <-> tests/api.rs), and must-never-break properties in
+   invariants.tree mapped to integration/property tests. If a guarantee matters
+   enough to state in a PR description, it belongs as a leaf. Then run
+   `btt check` and walk me through the output. Fix or explain its findings.
 
 5. Suggest where to wire `btt check` into CI or a pre-commit hook (it exits
    non-zero on errors), but don't add it without asking me.

@@ -104,7 +104,7 @@ mod when_a_pack_name_is_not_a_single_path_component {
 
     #[test]
     fn refuses_to_load() {
-        for name in ["../evil", "a/b", "/abs", ".."] {
+        for name in ["../evil", "a/b", "/abs", "..", ".hidden", "a\\b"] {
             let err = pack::load(name, repo_root()).unwrap_err();
             assert!(matches!(err, Error::UnsafePath { .. }), "{name}: {err}");
         }

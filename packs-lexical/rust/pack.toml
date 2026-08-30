@@ -14,7 +14,7 @@ format = 1
 
 [pack]
 name = "rust-lexical"
-version = "0.2.0"
+version = "0.3.0"
 description = "Rust tests via lexical scanning (no grammar): nested mod blocks, #[test] fns"
 
 [compat]

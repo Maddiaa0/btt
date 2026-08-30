@@ -1,8 +1,8 @@
 # Releasing btt
 
 Releases are built by `dist` from version tags. The generated workflow builds
-the `btt` executable for macOS, Linux, and Windows; creates shell, PowerShell,
-npm, Homebrew, and MSI installers; publishes checksums and GitHub attestations;
+the `btt` executable for macOS and Linux; creates shell, npm, and Homebrew
+installers; publishes checksums and GitHub attestations;
 and then publishes the package-manager entries.
 
 ## One-time publisher setup

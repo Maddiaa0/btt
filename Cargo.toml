@@ -15,12 +15,6 @@ categories = ["development-tools::testing", "command-line-utilities"]
 publish = ["crates-io"]
 exclude = ["/web"]
 
-[package.metadata.wix]
-upgrade-guid = "7718ED1E-CEE1-487D-8BAC-83CA122363EF"
-path-guid = "CA724D62-57DD-443A-9992-08FB3B860D20"
-license = false
-eula = false
-
 [lib]
 name = "btt"
 path = "src/lib.rs"

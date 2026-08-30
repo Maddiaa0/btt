@@ -380,8 +380,9 @@ fn read_diff_side(repo: &Path, side: DiffSide<'_>) -> Result<BTreeMap<String, St
 }
 
 fn read_revision(repo: &Path, revision: &str) -> Result<BTreeMap<String, String>> {
+    let object_id = resolve_revision(repo, revision)?;
     let output = ProcessCommand::new("git")
-        .args(["ls-tree", "-r", "--name-only", revision, "--"])
+        .args(["ls-tree", "-r", "--name-only", &object_id, "--"])
         .current_dir(repo)
         .output()
         .with_context(|| format!("listing revision {revision}"))?;
@@ -394,7 +395,7 @@ fn read_revision(repo: &Path, revision: &str) -> Result<BTreeMap<String, String>
     let names = String::from_utf8(output.stdout)?;
     let mut files = BTreeMap::new();
     for path in names.lines().filter(|path| is_discovered_tree(path)) {
-        let object = format!("{revision}:{path}");
+        let object = format!("{object_id}:{path}");
         let shown = ProcessCommand::new("git")
             .args(["show", &object, "--"])
             .current_dir(repo)
@@ -409,6 +410,22 @@ fn read_revision(repo: &Path, revision: &str) -> Result<BTreeMap<String, String>
         files.insert(path.to_string(), String::from_utf8(shown.stdout)?);
     }
     Ok(files)
+}
+
+fn resolve_revision(repo: &Path, revision: &str) -> Result<String> {
+    let commit = format!("{revision}^{{commit}}");
+    let output = ProcessCommand::new("git")
+        .args(["rev-parse", "--verify", "--end-of-options", &commit])
+        .current_dir(repo)
+        .output()
+        .with_context(|| format!("resolving revision {revision}"))?;
+    if !output.status.success() {
+        bail!(
+            "cannot resolve revision {revision}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8(output.stdout)?.trim().to_string())
 }
 
 fn is_discovered_tree(path: &str) -> bool {

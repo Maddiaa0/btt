@@ -185,8 +185,37 @@ mod when_the_comparison_cannot_be_made {
         assert!(
             String::from_utf8(output.stderr)
                 .unwrap()
-                .contains("cannot read revision does-not-exist")
+                .contains("cannot resolve revision does-not-exist")
         );
+    }
+
+    #[test]
+    fn rejects_a_leading_dash_revision_without_git_usage_output() {
+        let dir = seeded("leading-dash-human");
+        let output = btt(&dir, &["diff", "--", "-v"]);
+        assert_eq!(output.status.code(), Some(2));
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains("cannot resolve revision -v"), "{stderr}");
+        assert!(!stderr.contains("usage:"), "{stderr}");
+        assert_eq!(stderr.lines().count(), 1, "{stderr}");
+    }
+
+    #[test]
+    fn emits_a_json_envelope_for_a_leading_dash_revision() {
+        let dir = seeded("leading-dash-json");
+        let output = btt(&dir, &["diff", "--format", "json", "--", "-v"]);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stderr.is_empty());
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert!(
+            json["error"]
+                .as_str()
+                .unwrap()
+                .contains("cannot resolve revision -v")
+        );
+        assert!(!stdout.contains("usage:"), "{stdout}");
+        assert_eq!(stdout.lines().count(), 1);
     }
 
     #[test]

@@ -13,6 +13,7 @@ lexical extraction
 │   ├── it drops source derived patterns between files
 │   └── it ignores non module aliases identically
 ├── when fuzzing random test files
+│   ├── it emits aliases and parameterized tests
 │   └── it never diverges from the native extraction
 ├── when extracting rust lexically
 │   └── it matches the native extraction

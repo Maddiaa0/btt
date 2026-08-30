@@ -271,25 +271,33 @@ mod when_fuzzing_random_test_files {
         rng.pick(&["", "", "", "/* trivia */"])
     }
 
-    fn gen_items(rng: &mut Rng, depth: usize, out: &mut String) {
+    struct Receivers {
+        tests: Vec<String>,
+        blocks: Vec<String>,
+        each: Vec<String>,
+    }
+
+    fn gen_items(rng: &mut Rng, depth: usize, receivers: &Receivers, out: &mut String) {
         use std::fmt::Write;
         let indent = "  ".repeat(depth + 1);
         for _ in 0..=rng.below(3) {
-            match rng.below(if depth < 3 { 6 } else { 4 }) {
+            match rng.below(if depth < 3 { 10 } else { 8 }) {
                 0 => {
                     let m = rng.pick(&["", ".only", ".skip", ".todo"]);
                     let (tr, name) = (trivia(rng), title(rng));
+                    let receiver = rng.pick(&receivers.tests);
                     let _ = writeln!(
                         out,
-                        "{indent}it{m}{tr}({}, () => {{ expect(1).toBe(1); }});",
+                        "{indent}{receiver}{m}{tr}({}, () => {{ expect(1).toBe(1); }});",
                         literal(rng, &name)
                     );
                 }
                 1 => {
                     let (tr, name) = (trivia(rng), title(rng));
+                    let receiver = rng.pick(&receivers.tests);
                     let _ = writeln!(
                         out,
-                        "{indent}test{tr}({}, () => {{}});",
+                        "{indent}{receiver}{tr}({}, () => {{}});",
                         literal(rng, &name)
                     );
                 }
@@ -304,11 +312,44 @@ mod when_fuzzing_random_test_files {
                         rng.below(1000)
                     );
                 }
+                4 => {
+                    let receiver = rng.pick(&receivers.each).clone();
+                    let name = title(rng);
+                    if rng.below(2) == 0 {
+                        let _ = writeln!(
+                            out,
+                            "{indent}{receiver}.each([[1], [2]])({}, () => {{}});",
+                            literal(rng, &name)
+                        );
+                    } else {
+                        let _ = writeln!(
+                            out,
+                            "{indent}{receiver}.each`value | expected\n1 | 1`({}, () => {{}});",
+                            literal(rng, &name)
+                        );
+                    }
+                }
+                5 => {
+                    let alias = format!("local_alias_{}", rng.below(1000));
+                    let target = rng.pick(&["it", "test", "describe"]);
+                    let _ = writeln!(
+                        out,
+                        "{indent}function bind_{alias}() {{ const {alias} = {target}; {alias}(\"ignored\", () => {{}}); }}"
+                    );
+                }
+                6 => {
+                    let alias = format!("loop_alias_{}", rng.below(1000));
+                    let target = rng.pick(&["it", "test", "describe"]);
+                    let _ = writeln!(
+                        out,
+                        "{indent}for (const {alias} = {target}; false;) {{ {alias}(\"ignored\", () => {{}}); }}"
+                    );
+                }
                 _ => {
-                    let f = rng.pick(&["describe", "suite", "describe.only", "test.describe"]);
+                    let f = rng.pick(&receivers.blocks);
                     let (tr, name) = (trivia(rng), title(rng));
                     let _ = writeln!(out, "{indent}{f}{tr}({}, () => {{", literal(rng, &name));
-                    gen_items(rng, depth + 1, out);
+                    gen_items(rng, depth + 1, receivers, out);
                     let _ = writeln!(out, "{indent}}});");
                 }
             }
@@ -318,21 +359,84 @@ mod when_fuzzing_random_test_files {
     fn gen_file(rng: &mut Rng) -> String {
         use std::fmt::Write;
         let mut out = String::from("import { describe, it } from \"vitest\";\n");
+        let mut receivers = Receivers {
+            tests: vec!["it".to_owned(), "test".to_owned()],
+            blocks: ["describe", "suite", "describe.only", "test.describe"]
+                .map(str::to_owned)
+                .to_vec(),
+            each: vec!["it".to_owned(), "test".to_owned(), "describe".to_owned()],
+        };
+        for group in 0..rng.below(3) {
+            let base = rng.pick(&["it", "test", "describe"]);
+            let chain_len = 1 + rng.below(3);
+            let mut value = (*base).to_owned();
+            for link in 0..chain_len {
+                let alias = format!("alias_{group}_{link}");
+                let export = if rng.below(4) == 0 { "export " } else { "" };
+                let binding = rng.pick(&["const", "let", "var"]);
+                let _ = writeln!(out, "{export}{binding} {alias} = {value};");
+                value = alias;
+            }
+            receivers.each.push(value.clone());
+            if matches!(*base, "it" | "test") {
+                receivers.tests.push(value);
+            } else {
+                receivers.blocks.push(value);
+            }
+        }
         for _ in 0..=rng.below(2) {
             let name = title(rng);
             let _ = writeln!(out, "describe({}, () => {{", literal(rng, &name));
-            gen_items(rng, 0, &mut out);
+            gen_items(rng, 0, &receivers, &mut out);
             out.push_str("});\n");
         }
         out
     }
 
     #[test]
+    fn emits_aliases_and_parameterized_tests() {
+        let mut alias_files = 0;
+        let mut curried_each_files = 0;
+        let mut tagged_each_files = 0;
+        let mut aliased_each_files = 0;
+        for seed in 0..64u64 {
+            let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            let source = gen_file(&mut rng);
+            alias_files += usize::from(source.lines().any(|line| {
+                !line.starts_with(' ')
+                    && line
+                        .split_ascii_whitespace()
+                        .any(|word| word.starts_with("alias_"))
+            }));
+            curried_each_files += usize::from(source.contains(".each([["));
+            tagged_each_files += usize::from(source.contains(".each`"));
+            aliased_each_files += usize::from(
+                source
+                    .lines()
+                    .any(|line| line.trim_start().starts_with("alias_") && line.contains(".each")),
+            );
+        }
+        assert!(alias_files > 0, "generator emitted no alias declarations");
+        assert!(
+            curried_each_files > 0,
+            "generator emitted no curried .each calls"
+        );
+        assert!(
+            tagged_each_files > 0,
+            "generator emitted no tagged .each calls"
+        );
+        assert!(
+            aliased_each_files > 0,
+            "generator emitted no aliased .each calls"
+        );
+    }
+
+    #[test]
     fn never_diverges_from_the_native_extraction() {
-        // 150 seeds ≈ 13s in debug — the cost is the *native* reference
+        // 120 seeds keeps the richer files near the previous runtime; the cost is the native
         // (per-extract query compilation), not the lexical scan.
         let (native_p, lexical_p) = (native_pack(), lexical_pack());
-        for seed in 0..150u64 {
+        for seed in 0..120u64 {
             let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
             let source = gen_file(&mut rng);
             let native =

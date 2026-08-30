@@ -52,6 +52,17 @@ pub struct Unsupported {
     pub line: usize,
 }
 
+/// Byte span of an extracted test definition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestSpan {
+    /// 1-based line where the test definition begins.
+    pub line: usize,
+    /// Inclusive start byte of the test definition.
+    pub start: usize,
+    /// Exclusive end byte of the test definition.
+    pub end: usize,
+}
+
 /// Structural nodes and non-structural diagnostics produced in one pass.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Extraction {
@@ -59,6 +70,8 @@ pub struct Extraction {
     pub nodes: Vec<ActualNode>,
     /// Recognized constructs that cannot be represented.
     pub unsupported: Vec<Unsupported>,
+    /// Source spans of every extracted test.
+    pub test_spans: Vec<TestSpan>,
 }
 
 impl ActualNode {
@@ -385,6 +398,16 @@ fn finish_extraction(pack: &Pack, root: Node<'_>, pass: &mut QueryPass) -> Extra
         captures.retain(|c| c.kind != ActualKind::Test || has_marker(root, c, &pass.markers));
     }
 
+    let test_spans = captures
+        .iter()
+        .filter(|capture| capture.kind == ActualKind::Test)
+        .map(|capture| TestSpan {
+            line: capture.line,
+            start: capture.start,
+            end: capture.end,
+        })
+        .collect();
+
     // In pre-order, a block's descendants are exactly the following captures
     // whose start lies before the block's end, so one cursor pass builds the
     // whole forest.
@@ -394,6 +417,7 @@ fn finish_extraction(pack: &Pack, root: Node<'_>, pass: &mut QueryPass) -> Extra
     Extraction {
         nodes: ActualNode::prune_empty_blocks(top),
         unsupported: std::mem::take(&mut pass.unsupported),
+        test_spans,
     }
 }
 

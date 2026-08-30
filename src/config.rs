@@ -26,6 +26,8 @@ pub struct CheckConfig {
     pub order: Level,
     /// Severity of recognized constructs that cannot be represented.
     pub unsupported: Level,
+    /// Severity of scaffold markers that remain in test bodies.
+    pub todo: Level,
     /// Severity of test-bearing source files that no `.tree` spec covers.
     pub uncovered: Level,
 }
@@ -36,6 +38,7 @@ impl Default for CheckConfig {
             extra: Level::Warn,
             order: Level::Warn,
             unsupported: Level::Error,
+            todo: Level::Warn,
             uncovered: Level::Warn,
         }
     }
@@ -126,6 +129,15 @@ mod tests {
     fn touch_config(dir: &Path) {
         std::fs::create_dir_all(dir).unwrap();
         std::fs::write(dir.join("btt.toml"), "").unwrap();
+    }
+
+    mod when_using_default_check_severities {
+        use super::*;
+
+        #[test]
+        fn warns_for_todo_markers() {
+            assert_eq!(CheckConfig::default().todo, Level::Warn);
+        }
     }
 
     mod when_finding_the_nearest_config {

@@ -8,7 +8,7 @@ import { describe, it } from "vitest"; // adjust for your runner (jest/bun have 
 
 {% elif ev.kind == "test" -%}
 {{ ev.indent }}it("{{ ev.name | js_string }}", () => {
-{{ ev.indent }}  // TODO: {{ ev.text | line_safe }}
+{{ ev.indent }}  // btt:todo — {{ ev.text | line_safe }}
 {{ ev.indent }}});
 
 {% endif -%}

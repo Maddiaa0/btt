@@ -22,7 +22,8 @@ lexical extraction
 ├── when a raw name profile extracts declarations
 │   └── it nests tests by bracket spans
 ├── when a scaffolded file is checked lexically
-│   └── it reports no findings for hostile titles
+│   ├── it reports no findings for hostile titles
+│   └── it reports todo markers identically to the native backend
 ├── when a lexical profile is malformed
 │   └── it refuses to load
 └── when the scanner cannot account for the source

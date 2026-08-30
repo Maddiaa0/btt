@@ -290,6 +290,7 @@ pub fn check_file(
         })
         .collect();
     findings.extend(check::diff(&expected, &actual));
+    findings.extend(todo_findings(&source, &extracted.test_spans));
     Ok(findings
         .into_iter()
         .filter_map(|finding| {
@@ -298,6 +299,7 @@ pub fn check_file(
                 Finding::Extra { .. } => cfg.extra,
                 Finding::OutOfOrder { .. } => cfg.order,
                 Finding::Unsupported { .. } => cfg.unsupported,
+                Finding::Todo { .. } => cfg.todo,
             };
             match level {
                 Level::Ignore => None,
@@ -305,6 +307,23 @@ pub fn check_file(
             }
         })
         .collect())
+}
+
+fn todo_findings(source: &str, test_spans: &[extract::TestSpan]) -> Vec<Finding> {
+    const MARKER: &str = "btt:todo";
+    source
+        .match_indices(MARKER)
+        .map(|(at, _)| {
+            let test_line = test_spans
+                .iter()
+                .find(|span| span.start <= at && at < span.end)
+                .map(|span| span.line);
+            Finding::Todo {
+                target_line: source[..at].bytes().filter(|byte| *byte == b'\n').count() + 1,
+                test_line,
+            }
+        })
+        .collect()
 }
 
 /// What happened when one tree file was checked.

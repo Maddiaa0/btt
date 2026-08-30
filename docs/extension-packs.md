@@ -229,6 +229,7 @@ hidden. Missing expected nodes are always errors.
 | `order` | `"warn"` | sibling order differs between source and tree |
 | `uncovered` | `"warn"` | a test-bearing source file has no tree spec |
 | `unsupported` | `"error"` | extraction recognizes a construct that cannot be represented, such as `test.each` |
+| `todo` | `"warn"` | the exact scaffold marker `btt:todo` remains in a routed source file |
 
 `test_requires_marker` is for conventions where the test-defining syntax
 is ambiguous on its own: in Rust *any* `fn` matches the query, and only
@@ -402,6 +403,13 @@ Missing any required capture fails with `query must define @block,
 
 ## 6. The scaffold template
 
+Every generated test body should contain a comment with the exact marker
+`btt:todo`. `btt check` scans extracted test spans for this language-agnostic
+contract and reports the marker's source line until the body is filled and the
+marker removed. A marker outside every extracted test span is still reported
+as a file-level finding. Fresh scaffolds therefore warn by default; projects
+can set `todo = "error"` under `[check]` once unfinished bodies must fail CI.
+
 `btt scaffold` flattens the expected tree into a linear event stream so
 templates stay simple loops instead of recursive macros
 ([`src/scaffold.rs`](../src/scaffold.rs)). The MiniJinja context:
@@ -442,7 +450,7 @@ The Lua template, `templates/test.jinja`:
 
 {% elif ev.kind == "test" -%}
 {{ ev.indent }}it("{{ ev.name | js_string }}", function()
-{{ ev.indent }}  -- TODO: {{ ev.text | line_safe }}
+{{ ev.indent }}  -- btt:todo — {{ ev.text | line_safe }}
 {{ ev.indent }}end)
 
 {% endif -%}
@@ -495,11 +503,11 @@ $ btt scaffold src/stack.tree --pack lua --stdout
 describe("Stack", function()
   describe("when the stack is empty", function()
     it("reports a size of zero", function()
-      -- TODO: it reports a size of zero
+      -- btt:todo — it reports a size of zero
     end)
 
     it("returns nil on pop", function()
-      -- TODO: it returns nil on pop
+      -- btt:todo — it returns nil on pop
     end)
 
   end)
@@ -514,9 +522,11 @@ titles as strings. Write it for real and check the round trip:
 $ btt scaffold src/stack.tree
 scaffolded src/stack_spec.lua (4 tests) from src/stack.tree
 $ btt check
-✓ src/stack.tree (stack_spec.lua)
+✗ src/stack.tree → src/stack_spec.lua
+    warn  todo: test body never filled in — scaffold marker still present (src/stack_spec.lua:4)
+    …
 
-1 tree file(s), 0 uncovered, 0 error(s), 0 warning(s)
+1 tree file(s), 0 uncovered, 0 error(s), 4 warning(s)
 ```
 
 Now break it on purpose — rename one test title in `stack_spec.lua` from

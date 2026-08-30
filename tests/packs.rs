@@ -2,12 +2,35 @@
 //! public library API. Sources are in-memory; no fixture files needed.
 
 use btt::check::{self, Finding};
+use btt::config::{CheckConfig, Level};
 use btt::extract::ActualKind;
-use btt::{extract, pack, scaffold, tree};
+use btt::{extract, pack, runner, scaffold, tree};
 use std::path::Path;
 
 fn repo_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
+}
+
+fn todo_marker() -> String {
+    ["btt:", "todo"].concat()
+}
+
+fn check_source(pack_name: &str, source: &str, cfg: CheckConfig) -> Vec<runner::Reported> {
+    let dir = repo_root()
+        .join("target/todo-marker-fixtures")
+        .join(pack_name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let tree_path = dir.join("map.tree");
+    let target = if pack_name == "rust" {
+        dir.join("map.rs")
+    } else {
+        dir.join("map.test.ts")
+    };
+    std::fs::write(&tree_path, "Map\n└── it works\n").unwrap();
+    std::fs::write(&target, source).unwrap();
+    let pack = pack::load(pack_name, repo_root()).unwrap();
+    runner::check_file(&pack, &tree_path, &target, &cfg).unwrap()
 }
 
 const SPEC: &str = "\
@@ -208,6 +231,7 @@ mod when_scaffolding_from_a_tree {
         assert!(out.contains("mod when_the_key_is_present {"), "{out}");
         assert!(out.contains("fn returns_the_value()"), "{out}");
         assert!(out.contains("#[test]"), "{out}");
+        assert!(out.contains(&todo_marker()), "{out}");
     }
 
     #[test]
@@ -220,6 +244,58 @@ mod when_scaffolding_from_a_tree {
             "{out}"
         );
         assert!(out.contains(r#"it("returns none", () => {"#), "{out}");
+        assert!(out.contains(&todo_marker()), "{out}");
+    }
+}
+
+mod when_checking_scaffold_markers {
+    use super::*;
+
+    fn two_tests() -> String {
+        let marker = todo_marker();
+        format!(
+            "describe(\"Map\", () => {{\n  it(\"works\", () => {{\n    // {marker}\n  }});\n}});\n"
+        )
+    }
+
+    #[test]
+    fn reports_each_marker_at_its_source_line_with_the_default_severity() {
+        let findings = check_source("typescript", &two_tests(), CheckConfig::default());
+        assert!(matches!(
+            findings.as_slice(),
+            [runner::Reported {
+                finding: Finding::Todo {
+                    target_line: 3,
+                    test_line: Some(2)
+                },
+                level: Level::Warn
+            }]
+        ));
+    }
+
+    #[test]
+    fn clears_a_finding_when_its_marker_is_removed() {
+        let source = two_tests().replace(&todo_marker(), "body filled");
+        assert!(check_source("typescript", &source, CheckConfig::default()).is_empty());
+    }
+
+    #[test]
+    fn reports_a_marker_outside_a_test_span() {
+        let source = format!(
+            "// {}\ndescribe(\"Map\", () => {{ it(\"works\", () => {{}}); }});\n",
+            todo_marker()
+        );
+        let findings = check_source("typescript", &source, CheckConfig::default());
+        assert!(matches!(
+            findings.as_slice(),
+            [runner::Reported {
+                finding: Finding::Todo {
+                    target_line: 1,
+                    test_line: None
+                },
+                ..
+            }]
+        ));
     }
 }
 

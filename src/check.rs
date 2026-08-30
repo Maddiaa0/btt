@@ -109,6 +109,13 @@ pub enum Finding {
         /// 1-based line in the target file.
         target_line: usize,
     },
+    /// A scaffold marker remains in the source.
+    Todo {
+        /// 1-based line containing the marker.
+        target_line: usize,
+        /// 1-based line of the containing test, or none for a file-level marker.
+        test_line: Option<usize>,
+    },
 }
 
 /// Diff expected vs actual structure.

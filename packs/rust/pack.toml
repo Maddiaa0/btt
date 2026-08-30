@@ -2,7 +2,7 @@ format = 1
 
 [pack]
 name = "rust"
-version = "0.2.0"
+version = "0.2.1"
 description = "Rust tests: nested `mod` blocks for branches, #[test] fns for leaves"
 
 [compat]

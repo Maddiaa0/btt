@@ -16,6 +16,7 @@ mod tests {
 {% elif ev.kind == "test" -%}
 {{ pad }}{{ ev.indent }}#[test]
 {{ pad }}{{ ev.indent }}fn {{ ev.name }}() {
+{{ pad }}{{ ev.indent }}    // btt:todo
 {{ pad }}{{ ev.indent }}    todo!("{{ ev.text | rust_string }}");
 {{ pad }}{{ ev.indent }}}
 

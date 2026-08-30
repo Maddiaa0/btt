@@ -5,9 +5,11 @@
 //! cases in the space of generated test files.
 
 use btt::check;
+use btt::check::Finding;
+use btt::config::CheckConfig;
 use btt::extract;
 use btt::pack::{self, Pack};
-use btt::{scaffold, tree};
+use btt::{runner, scaffold, tree};
 use std::path::Path;
 
 fn repo_root() -> &'static Path {
@@ -712,6 +714,34 @@ mod when_a_scaffolded_file_is_checked_lexically {
         let actual = check::unwrap_wrappers(actual, &p.manifest.mapping.wrappers);
         let findings = check::diff(&expected, &actual);
         assert!(findings.is_empty(), "{findings:?}\n---\n{out}");
+    }
+
+    #[test]
+    fn reports_todo_markers_identically_to_the_native_backend() {
+        let marker = ["btt:", "todo"].concat();
+        let source = format!(
+            "describe(\"HashMap\", () => {{\n  it(\"returns none\", () => {{ // {marker}\n  }});\n}});\n"
+        );
+        let dir = repo_root().join("target/lexical-fixtures/todo-parity");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let tree_path = dir.join("map.tree");
+        let target = dir.join("map.test.ts");
+        std::fs::write(&tree_path, "HashMap\n└── it returns none\n").unwrap();
+        std::fs::write(&target, source).unwrap();
+
+        let lines = |pack: &Pack| {
+            runner::check_file(pack, &tree_path, &target, &CheckConfig::default())
+                .unwrap()
+                .into_iter()
+                .filter_map(|reported| match reported.finding {
+                    Finding::Todo { target_line, .. } => Some((target_line, reported.level)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(lines(&native_pack()), lines(&lexical_pack()));
+        assert_eq!(lines(&native_pack()).len(), 1);
     }
 }
 

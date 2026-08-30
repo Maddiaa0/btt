@@ -15,6 +15,10 @@ language packs
 ├── when scaffolding from a tree
 │   ├── it renders rust modules and test functions
 │   └── it renders nested describe blocks
+├── when checking scaffold markers
+│   ├── it reports each marker at its source line with the default severity
+│   ├── it clears a finding when its marker is removed
+│   └── it reports a marker outside a test span
 ├── when scaffolding hostile spec text
 │   └── it escapes quotes and format braces
 ├── when a scaffolded file is checked

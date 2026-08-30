@@ -484,6 +484,10 @@ fn describe(finding: &Finding, tree_rel: &Path, target: &Path) -> String {
             "unsupported: parameterized test (test.each) is not representable — expand into explicit leaves (see AGENT-SETUP) ({}:{target_line})",
             target.display()
         ),
+        Finding::Todo { target_line, .. } => format!(
+            "todo: test body never filled in — scaffold marker still present ({}:{target_line})",
+            target.display()
+        ),
     }
 }
 
@@ -607,6 +611,8 @@ extra = "warn"
 order = "warn"
 # Severity of recognized constructs btt cannot represent: error | warn | ignore
 unsupported = "error"
+# Severity of scaffold markers left in test bodies: error | warn | ignore
+todo = "warn"
 # Severity of test-bearing files with no .tree spec: error | warn | ignore
 # (warn while adopting; set to "error" in CI once every file has a tree)
 uncovered = "warn"

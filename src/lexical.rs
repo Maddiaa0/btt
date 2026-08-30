@@ -38,7 +38,7 @@
 
 use crate::error::{Error, Result};
 use crate::extract::{
-    ActualKind, ActualNode, AliasCandidate, AliasSet, Capture, Extraction, Unsupported,
+    ActualKind, ActualNode, AliasCandidate, AliasSet, Capture, Extraction, TestSpan, Unsupported,
     build_nodes, decode_name,
 };
 use crate::pack::{Lexical, NameSyntax, Pack};
@@ -151,6 +151,15 @@ pub(crate) fn extract(pack: &Pack, cfg: &Lexical, source: &str) -> Result<Extrac
 
     captures.sort_by_key(|c| (c.start, std::cmp::Reverse(c.end)));
     captures.dedup_by_key(|c| (c.start, c.end, c.kind));
+    let test_spans = captures
+        .iter()
+        .filter(|capture| capture.kind == ActualKind::Test)
+        .map(|capture| TestSpan {
+            line: capture.line,
+            start: capture.start,
+            end: capture.end,
+        })
+        .collect();
     let mut i = 0;
     let top = build_nodes(&captures, &mut i, usize::MAX);
     let unsupported = cfg
@@ -171,6 +180,7 @@ pub(crate) fn extract(pack: &Pack, cfg: &Lexical, source: &str) -> Result<Extrac
     Ok(Extraction {
         nodes: ActualNode::prune_empty_blocks(top),
         unsupported,
+        test_spans,
     })
 }
 

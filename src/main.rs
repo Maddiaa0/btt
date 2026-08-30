@@ -3,14 +3,14 @@ use btt::check::Finding;
 use btt::config::{self, Level};
 use btt::extract::ActualKind;
 use btt::runner;
-use btt::{check, pack, scaffold, tree};
+use btt::{check, diff, pack, scaffold, tree};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command as ProcessCommand, ExitCode};
 
 mod pack_add;
 
@@ -30,6 +30,17 @@ enum Command {
         /// Number of files to check in parallel (default: one per core).
         #[arg(short, long)]
         jobs: Option<NonZeroUsize>,
+        /// Output format.
+        #[arg(long, value_enum, default_value_t)]
+        format: OutputFormat,
+    },
+    /// Compare behaviors in .tree specs between Git revisions.
+    Diff {
+        /// Revision or revision range (`REV` means `REV..working tree`).
+        revisions: String,
+        /// Exit 1 when differences exist.
+        #[arg(long)]
+        exit_code: bool,
         /// Output format.
         #[arg(long, value_enum, default_value_t)]
         format: OutputFormat,
@@ -91,16 +102,20 @@ enum PackCommand {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let json = cli.json_requested();
+    let diff_json = cli.diff_json_requested();
     match run(cli) {
         Ok(code) => code,
         Err(err) => {
             if json {
-                let report = JsonReport::error(format!("{err:#}"));
+                let serialized = if diff_json {
+                    serde_json::to_string(&DiffJsonReport::error(format!("{err:#}")))
+                } else {
+                    serde_json::to_string(&JsonReport::error(format!("{err:#}")))
+                };
                 println!(
                     "{}",
-                    serde_json::to_string(&report).unwrap_or_else(|_| {
-                        r#"{"error":"failed to serialize check error"}"#.to_string()
-                    })
+                    serialized
+                        .unwrap_or_else(|_| r#"{"error":"failed to serialize error"}"#.to_string())
                 );
             } else {
                 eprintln!("error: {err:#}");
@@ -115,6 +130,19 @@ impl Cli {
         matches!(
             self.command,
             Command::Check {
+                format: OutputFormat::Json,
+                ..
+            } | Command::Diff {
+                format: OutputFormat::Json,
+                ..
+            }
+        )
+    }
+
+    fn diff_json_requested(&self) -> bool {
+        matches!(
+            self.command,
+            Command::Diff {
                 format: OutputFormat::Json,
                 ..
             }
@@ -132,6 +160,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
             jobs,
             format,
         } => cmd_check(&paths, jobs, format, &root),
+        Command::Diff {
+            revisions,
+            exit_code,
+            format,
+        } => cmd_diff(&revisions, exit_code, format, &cwd),
         Command::Scaffold {
             tree,
             pack,
@@ -147,6 +180,242 @@ fn run(cli: Cli) -> Result<ExitCode> {
         },
         Command::Init { skill } => cmd_init(&root, skill),
     }
+}
+
+#[derive(Default, Serialize)]
+struct DiffJsonSummary {
+    tree_files: usize,
+    added: usize,
+    removed: usize,
+    renamed: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum DiffStatus {
+    Added,
+    Removed,
+    Changed,
+}
+
+#[derive(Serialize)]
+struct DiffJsonResult {
+    tree: String,
+    status: DiffStatus,
+    added: Vec<String>,
+    removed: Vec<String>,
+    renamed: Vec<diff::Rename>,
+}
+
+#[derive(Serialize)]
+struct DiffJsonReport {
+    summary: DiffJsonSummary,
+    results: Vec<DiffJsonResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+impl DiffJsonReport {
+    fn error(error: String) -> Self {
+        Self {
+            summary: DiffJsonSummary::default(),
+            results: Vec::new(),
+            error: Some(error),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum DiffSide<'a> {
+    Revision(&'a str),
+    Working,
+}
+
+fn cmd_diff(
+    revisions: &str,
+    exit_code: bool,
+    format: OutputFormat,
+    cwd: &Path,
+) -> Result<ExitCode> {
+    let repo = git_repo_root(cwd)?;
+    let (old, new) = match revisions.split_once("..") {
+        Some((old, new)) if !old.is_empty() && !new.is_empty() && !new.contains("..") => {
+            (DiffSide::Revision(old), DiffSide::Revision(new))
+        }
+        Some(_) => bail!("revision range must be REV..REV"),
+        None => (DiffSide::Revision(revisions), DiffSide::Working),
+    };
+    if revisions.is_empty() {
+        bail!("revision must not be empty");
+    }
+    let old_files = read_diff_side(&repo, old)?;
+    let new_files = read_diff_side(&repo, new)?;
+    let paths: std::collections::BTreeSet<_> =
+        old_files.keys().chain(new_files.keys()).cloned().collect();
+    let mut report = DiffJsonReport {
+        summary: DiffJsonSummary::default(),
+        results: Vec::new(),
+        error: None,
+    };
+    for path in paths {
+        let (status, changes) = match (old_files.get(&path), new_files.get(&path)) {
+            (Some(old), Some(new)) => {
+                let old =
+                    tree::parse(old).with_context(|| format!("parsing {path} on old side"))?;
+                let new =
+                    tree::parse(new).with_context(|| format!("parsing {path} on new side"))?;
+                let changes = diff::compare(&old, &new);
+                if changes.is_empty() {
+                    continue;
+                }
+                (DiffStatus::Changed, changes)
+            }
+            (None, Some(new)) => (
+                DiffStatus::Added,
+                diff::Changes {
+                    added: behavior_paths(new, &path, "new")?,
+                    ..diff::Changes::default()
+                },
+            ),
+            (Some(old), None) => (
+                DiffStatus::Removed,
+                diff::Changes {
+                    removed: behavior_paths(old, &path, "old")?,
+                    ..diff::Changes::default()
+                },
+            ),
+            (None, None) => unreachable!(),
+        };
+        report.summary.added += changes.added.len();
+        report.summary.removed += changes.removed.len();
+        report.summary.renamed += changes.renamed.len();
+        report.results.push(DiffJsonResult {
+            tree: path,
+            status,
+            added: changes.added,
+            removed: changes.removed,
+            renamed: changes.renamed,
+        });
+    }
+    report.summary.tree_files = report.results.len();
+    let different = !report.results.is_empty();
+    match format {
+        OutputFormat::Json => println!("{}", serde_json::to_string(&report)?),
+        OutputFormat::Human => render_diff_human(&report),
+    }
+    Ok(if exit_code && different {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    })
+}
+
+fn behavior_paths(source: &str, path: &str, side: &str) -> Result<Vec<String>> {
+    let trees = tree::parse(source).with_context(|| format!("parsing {path} on {side} side"))?;
+    Ok(diff::compare(&[], &trees).added)
+}
+
+fn render_diff_human(report: &DiffJsonReport) {
+    for result in &report.results {
+        let label = match result.status {
+            DiffStatus::Added => "ADDED",
+            DiffStatus::Removed => "REMOVED",
+            DiffStatus::Changed => "CHANGED",
+        };
+        println!("{label} {}", result.tree);
+        for rename in &result.renamed {
+            println!("  ~ {} -> {}", rename.from, rename.to);
+        }
+        for path in &result.removed {
+            println!("  - {path}");
+        }
+        for path in &result.added {
+            println!("  + {path}");
+        }
+    }
+    println!(
+        "\n{} tree file(s) changed, {} added, {} removed, {} renamed",
+        report.summary.tree_files,
+        report.summary.added,
+        report.summary.removed,
+        report.summary.renamed
+    );
+}
+
+fn git_repo_root(cwd: &Path) -> Result<PathBuf> {
+    let output = ProcessCommand::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(cwd)
+        .output()
+        .context("running git rev-parse")?;
+    if !output.status.success() {
+        bail!(
+            "not a git repository: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(PathBuf::from(String::from_utf8(output.stdout)?.trim()))
+}
+
+fn read_diff_side(repo: &Path, side: DiffSide<'_>) -> Result<BTreeMap<String, String>> {
+    match side {
+        DiffSide::Working => {
+            let files = runner::find_tree_files(&[repo.to_path_buf()])?;
+            files
+                .into_iter()
+                .map(|path| {
+                    let relative = path
+                        .strip_prefix(repo)
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    let source = std::fs::read_to_string(&path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    Ok((relative, source))
+                })
+                .collect()
+        }
+        DiffSide::Revision(revision) => read_revision(repo, revision),
+    }
+}
+
+fn read_revision(repo: &Path, revision: &str) -> Result<BTreeMap<String, String>> {
+    let output = ProcessCommand::new("git")
+        .args(["ls-tree", "-r", "--name-only", revision, "--"])
+        .current_dir(repo)
+        .output()
+        .with_context(|| format!("listing revision {revision}"))?;
+    if !output.status.success() {
+        bail!(
+            "cannot read revision {revision}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let names = String::from_utf8(output.stdout)?;
+    let mut files = BTreeMap::new();
+    for path in names.lines().filter(|path| is_discovered_tree(path)) {
+        let object = format!("{revision}:{path}");
+        let shown = ProcessCommand::new("git")
+            .args(["show", &object, "--"])
+            .current_dir(repo)
+            .output()
+            .with_context(|| format!("reading {path} at {revision}"))?;
+        if !shown.status.success() {
+            bail!(
+                "cannot read {path} at {revision}: {}",
+                String::from_utf8_lossy(&shown.stderr).trim()
+            );
+        }
+        files.insert(path.to_string(), String::from_utf8(shown.stdout)?);
+    }
+    Ok(files)
+}
+
+fn is_discovered_tree(path: &str) -> bool {
+    Path::new(path).extension().is_some_and(|ext| ext == "tree")
+        && !path
+            .split('/')
+            .any(|part| matches!(part, ".git" | "target" | "node_modules"))
 }
 
 /// Load the project's configured packs; with no `packs = [...]`, only the

@@ -1,0 +1,14 @@
+btt diff
+├── when a revision is compared with the working tree
+│   ├── it reports added removed and conservatively renamed behaviors
+│   ├── it reports whole file additions and deletions
+│   └── it sees uncommitted tree changes
+├── when two revisions are compared
+│   ├── it emits the documented json shape
+│   ├── it returns one with exit code when differences exist
+│   └── it returns zero for identical revisions
+├── when invoked below the repository root
+│   └── it discovers trees across the repository
+└── when the comparison cannot be made
+    ├── it clearly reports an unknown revision
+    └── it emits one json error object and exits two

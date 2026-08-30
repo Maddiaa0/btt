@@ -586,6 +586,22 @@ The JSON contract is stable: existing fields and meanings will not be
 removed or changed. New finding kinds, severities, and fields may be added,
 so consumers should tolerate additive changes.
 
+### Machine-readable behavior diff output
+
+`btt diff <rev>[..<rev>] --format json` likewise emits exactly one JSON
+object. Its `summary` contains `tree_files` (changed files), `added`,
+`removed`, and `renamed` behavior counts. Each entry in `results` contains
+`tree`, `status` (`added`, `removed`, or `changed`), arrays of full behavior
+paths in `added` and `removed`, and a `renamed` array whose objects contain
+`from` and `to` paths. An empty diff has zeroed counts and an empty results
+array. Tool failures exit 2 with zeroed `summary`, empty `results`, and a
+top-level `error` string, matching the check command's error-envelope
+convention.
+
+This JSON contract has the same additive-only stability guarantee as check:
+existing fields and meanings will not be removed or changed, and consumers
+should tolerate new fields and status values.
+
 A missing/extra *pair* like this is check working as intended. The same
 pair for a test that **is** in both places means extraction and mapping
 disagree — a broken capture (extraction saw the wrong node text) or a

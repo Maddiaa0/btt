@@ -1,0 +1,6 @@
+behavior diff
+├── when tree contents differ
+│   ├── it computes a structural full path set diff
+│   └── it recognizes only unambiguous same position sibling renames
+└── when tree files differ
+    └── it keeps additions and removals separated by file

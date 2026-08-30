@@ -2,7 +2,7 @@ format = 1
 
 [pack]
 name = "typescript"
-version = "0.2.0"
+version = "0.3.0"
 description = "TypeScript/JavaScript tests: describe blocks for branches, it/test for leaves (vitest, jest, bun)"
 
 [compat]

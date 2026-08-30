@@ -7,7 +7,7 @@ format = 1
 
 [pack]
 name = "typescript-lexical"
-version = "0.2.0"
+version = "0.3.0"
 description = "TypeScript/JavaScript tests via lexical scanning (no grammar): describe blocks for branches, it/test for leaves"
 
 [compat]
@@ -51,8 +51,9 @@ open = '''(?:^|[^\w$.])(?<kw>(?:it|test|{{test_aliases}})(?:\.(?:only|skip|fails
 
 [lexical.alias]
 # Candidates are gathered in one scan, then resolved transitively in memory.
-# Extraction accepts only matches at curly-brace depth zero (module scope).
-open = '''(?:^|[^\w$])(?:const|let|var)\s+(?<name>[A-Za-z_$][\w$]*)(?:\s*:[^=;\n]+)?\s*=\s*(?<value>[^;\n]+)\s*[;\n]'''
+# Only statement-start declarations at module brace depth zero count. This
+# includes optional `export` and excludes `for (const ...)` headers.
+open = '''(?m)^\s*(?:export\s+)?(?:const|let|var)\s+(?<name>[A-Za-z_$][\w$]*)(?:\s*:[^=;\n]+)?\s*=\s*(?<value>[^;\n]+)\s*[;\n]'''
 
 [lexical.unsupported]
 open = '''(?:^|[^\w$.])(?:it|test|describe|{{each_aliases}})\.each\s*[(\x60]'''

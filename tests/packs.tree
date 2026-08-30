@@ -10,7 +10,7 @@ language packs
 │   └── it reports each through a test alias
 ├── when resolving typescript aliases
 │   ├── it resolves direct conditional and transitive aliases
-│   ├── it bounds a one hundred link chain
+│   ├── it bounds a ten thousand link chain
 │   └── it ignores aliases outside module scope
 ├── when scaffolding from a tree
 │   ├── it renders rust modules and test functions

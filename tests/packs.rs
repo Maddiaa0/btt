@@ -172,13 +172,17 @@ d2("HashMap", () => {
     }
 
     #[test]
-    fn bounds_a_one_hundred_link_chain() {
-        let mut source = String::from("const a0 = describe;\n");
-        for i in 1..=100 {
-            let _ = writeln!(source, "const a{i} = a{};", i - 1);
+    fn bounds_a_ten_thousand_link_chain() {
+        let mut source = String::new();
+        for i in 0..10_000 {
+            let _ = writeln!(source, "const a{i} = a{};", i + 1);
         }
-        source.push_str("a100(\"HashMap\", () => { describe(\"when the key is present\", () => { it(\"returns the value\", f); }); describe(\"when the key is absent\", () => { it(\"returns none\", f); }); });");
-        assert!(ts_findings(&source).is_empty());
+        source.push_str(
+            "const a10000 = describe;\na0(\"HashMap\", () => { it(\"unresolved\", f); });",
+        );
+        let pack = pack::load("typescript", repo_root()).unwrap();
+        let actual = extract::extract(&pack, Path::new("map.test.ts"), &source).unwrap();
+        assert!(actual.iter().all(|node| node.kind != ActualKind::Block));
     }
 
     #[test]

@@ -44,11 +44,25 @@
   (#match? @_each_obj "^(it|test|describe|{{each_aliases}})$")
   (#eq? @_each_prop "each"))
 
-; Alias support is deliberately module-only. This static query collects all
-; direct program bindings once; the core resolves chains/cycles in memory and
-; compiles at most one alias-expanded query for the file.
+; Alias support is deliberately limited to module-level const/let/var,
+; optionally export-prefixed. Loop headers and block-local bindings do not
+; count. The core resolves chains/cycles in memory and compiles at most one
+; alias-expanded query for the file.
 (program
-  (lexical_declaration
+  [(lexical_declaration
     (variable_declarator
       name: (identifier) @alias.name
-      value: (_) @alias.value)))
+      value: (_) @alias.value))
+   (variable_declaration
+    (variable_declarator
+      name: (identifier) @alias.name
+      value: (_) @alias.value))
+   (export_statement
+    [(lexical_declaration
+      (variable_declarator
+        name: (identifier) @alias.name
+        value: (_) @alias.value))
+     (variable_declaration
+      (variable_declarator
+        name: (identifier) @alias.name
+        value: (_) @alias.value))])])

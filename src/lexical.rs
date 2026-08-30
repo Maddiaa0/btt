@@ -32,9 +32,9 @@
 //! brackets, unterminated strings or comments) are tool errors, never
 //! silent partial extractions. `tests/lexical.rs` differentially fuzzes
 //! the typescript profile against the native grammar.
-//! TypeScript alias declarations are intentionally recognized only at
-//! module top level; this conservative boundary is shared with the native
-//! backend and avoids treating function-local bindings as global callees.
+//! TypeScript aliases are intentionally limited to statement-start module
+//! `const`/`let`/`var` declarations, optionally prefixed by `export`. This
+//! shared conservative boundary excludes loop headers and block-local bindings.
 
 use crate::error::{Error, Result};
 use crate::extract::{

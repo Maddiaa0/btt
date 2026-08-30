@@ -153,13 +153,41 @@ d2("suite", () => { d("nested", () => { t("works", f); }); });
     }
 
     #[test]
-    fn resolves_a_one_hundred_link_chain_identically() {
-        let mut source = String::from("const a0 = describe;\n");
-        for i in 1..=100 {
-            let _ = writeln!(source, "const a{i} = a{};", i - 1);
+    fn resolves_module_var_and_exported_aliases_identically() {
+        let source =
+            "var d = describe;\nexport const t = test;\nd(\"suite\", () => { t(\"works\", f); });";
+        assert_equivalent(source);
+        let actual = extract::extract(&lexical_pack(), Path::new("map.test.ts"), source).unwrap();
+        assert_eq!(actual.first().map(|node| node.name.as_str()), Some("suite"));
+    }
+
+    #[test]
+    fn ignores_for_header_aliases_identically() {
+        let source =
+            "for (const d = describe; ready; step()) {}\nd(\"ghost\", () => { it(\"nope\", f); });";
+        assert_equivalent(source);
+        let actual = extract::extract(&lexical_pack(), Path::new("map.test.ts"), source).unwrap();
+        assert!(
+            actual
+                .iter()
+                .all(|node| node.kind != extract::ActualKind::Block)
+        );
+    }
+
+    #[test]
+    fn bounds_a_ten_thousand_link_chain_identically() {
+        let mut source = String::new();
+        for i in 0..10_000 {
+            let _ = writeln!(source, "const a{i} = a{};", i + 1);
         }
-        source.push_str("a100(\"suite\", () => { it(\"works\", f); });");
+        source.push_str("const a10000 = describe;\na0(\"suite\", () => { it(\"works\", f); });");
         assert_equivalent(&source);
+        let actual = extract::extract(&lexical_pack(), Path::new("map.test.ts"), &source).unwrap();
+        assert!(
+            actual
+                .iter()
+                .all(|node| node.kind != extract::ActualKind::Block)
+        );
     }
 
     #[test]

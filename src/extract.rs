@@ -190,6 +190,7 @@ impl AliasSet {
                 &by_name,
                 &mut resolved,
                 &mut visiting,
+                MAX_ALIAS_DEPTH,
             ) {
                 Some(ActualKind::Block) => {
                     out.blocks.insert(candidate.name.clone());
@@ -204,11 +205,17 @@ impl AliasSet {
     }
 }
 
+/// Fail closed before source-controlled alias graphs can consume the process
+/// stack. Ordinary chains are memoized as candidates are visited; adversarial
+/// forward-reference chains deeper than this are simply not treated as aliases.
+const MAX_ALIAS_DEPTH: usize = 512;
+
 fn resolve_name<'a>(
     name: &'a str,
     candidates: &HashMap<&'a str, &'a str>,
     resolved: &mut HashMap<&'a str, Option<ActualKind>>,
     visiting: &mut BTreeSet<String>,
+    remaining: usize,
 ) -> Option<ActualKind> {
     if let Some(kind) = resolved.get(name) {
         return *kind;
@@ -216,9 +223,13 @@ fn resolve_name<'a>(
     if !visiting.insert(name.to_string()) {
         return None;
     }
+    if remaining == 0 {
+        visiting.remove(name);
+        return None;
+    }
     let kind = candidates
         .get(name)
-        .and_then(|value| resolve_value(value, candidates, resolved, visiting));
+        .and_then(|value| resolve_value(value, candidates, resolved, visiting, remaining - 1));
     visiting.remove(name);
     resolved.insert(name, kind);
     kind
@@ -229,12 +240,17 @@ fn resolve_value<'a>(
     candidates: &HashMap<&'a str, &'a str>,
     resolved: &mut HashMap<&'a str, Option<ActualKind>>,
     visiting: &mut BTreeSet<String>,
+    remaining: usize,
 ) -> Option<ActualKind> {
     let compact: String = value.chars().filter(|c| !c.is_whitespace()).collect();
     if let Some((_, arms)) = compact.split_once('?') {
         let (left, right) = arms.split_once(':')?;
-        let a = resolve_value(left, candidates, resolved, visiting)?;
-        return (resolve_value(right, candidates, resolved, visiting)? == a).then_some(a);
+        if remaining == 0 {
+            return None;
+        }
+        let a = resolve_value(left, candidates, resolved, visiting, remaining - 1)?;
+        return (resolve_value(right, candidates, resolved, visiting, remaining - 1)? == a)
+            .then_some(a);
     }
     let root = compact.split('.').next()?;
     match root {
@@ -243,7 +259,7 @@ fn resolve_value<'a>(
         "it" | "test" => Some(ActualKind::Test),
         alias => candidates
             .get_key_value(alias)
-            .and_then(|(&known, _)| resolve_name(known, candidates, resolved, visiting)),
+            .and_then(|(&known, _)| resolve_name(known, candidates, resolved, visiting, remaining)),
     }
 }
 
@@ -321,11 +337,7 @@ fn run_query(
         }
         if let (Some(name_i), Some(value_i)) = (alias_name_i, alias_value_i)
             && let (Some(name), Some(value)) = (node_for(name_i), node_for(value_i))
-            && name
-                .parent()
-                .and_then(|declarator| declarator.parent())
-                .and_then(|declaration| declaration.parent())
-                .is_some_and(|parent| parent.kind() == "program")
+            && is_module_alias(name)
         {
             candidates.push(AliasCandidate {
                 name: source[name.byte_range()].to_string(),
@@ -339,6 +351,25 @@ fn run_query(
         markers: marker_ranges,
         unsupported,
         candidates,
+    })
+}
+
+fn is_module_alias(name: Node<'_>) -> bool {
+    let Some(declaration) = name.parent().and_then(|declarator| declarator.parent()) else {
+        return false;
+    };
+    if !matches!(
+        declaration.kind(),
+        "lexical_declaration" | "variable_declaration"
+    ) {
+        return false;
+    }
+    declaration.parent().is_some_and(|parent| {
+        parent.kind() == "program"
+            || (parent.kind() == "export_statement"
+                && parent
+                    .parent()
+                    .is_some_and(|grandparent| grandparent.kind() == "program"))
     })
 }
 

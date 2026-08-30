@@ -141,7 +141,7 @@ struct Subtree {
 /// ancestor config; walking also finds config-only subtrees whose uncovered
 /// source files need their own packs and severity.
 fn subtree_roots(search: &[PathBuf], tree_files: &[PathBuf], root: &Path) -> Result<Vec<PathBuf>> {
-    let mut roots = std::collections::BTreeSet::from([root.to_path_buf()]);
+    let mut roots = std::collections::BTreeSet::new();
     roots.extend(
         tree_files
             .iter()
@@ -156,9 +156,9 @@ fn subtree_roots(search: &[PathBuf], tree_files: &[PathBuf], root: &Path) -> Res
         };
         let config_start = std::path::absolute(config_start)
             .with_context(|| format!("resolving {}", config_start.display()))?;
-        if let Some(config_root) = config::nearest_config_dir(&config_start, root) {
-            roots.insert(config_root);
-        }
+        roots.insert(
+            config::nearest_config_dir(&config_start, root).unwrap_or_else(|| root.to_path_buf()),
+        );
 
         let walker = walkdir::WalkDir::new(path)
             .into_iter()

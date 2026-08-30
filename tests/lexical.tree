@@ -3,6 +3,8 @@ lexical extraction
 │   └── it matches the native extraction
 ├── when decoys hide in comments and strings
 │   └── it matches the native extraction
+├── when aliases bind describe and it
+│   └── it matches the native extraction
 ├── when fuzzing random test files
 │   └── it never diverges from the native extraction
 ├── when extracting rust lexically

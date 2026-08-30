@@ -57,6 +57,9 @@ Configured per language by packs (see `btt packs`; project config in
 - **TypeScript** (`name.tree` ↔ `name.test.ts`): the root is a top-level
   `describe("HashMap", …)`; branches are nested `describe`s with the
   condition text verbatim; leaves are `it("returns the value", …)`.
+  Locally declared aliases of these callees are resolved — e.g.
+  `const describeDb = runDb ? describe : describe.skip` opens branches
+  like `describe`. Import aliases (`import { describe as d }`) are not.
 
 ## Adopting btt in an existing codebase
 

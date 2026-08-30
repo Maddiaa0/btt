@@ -5,6 +5,9 @@ language packs
 │   └── it reports the missing and extra test
 ├── when checking a playwright style file
 │   └── it treats test describe as a block
+├── when checking an aliased typescript file
+│   ├── it resolves conditional describe and it aliases
+│   └── it resolves an alias of an alias
 ├── when scaffolding from a tree
 │   ├── it renders rust modules and test functions
 │   └── it renders nested describe blocks

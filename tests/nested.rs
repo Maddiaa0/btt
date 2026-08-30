@@ -42,16 +42,21 @@ fn fixture(name: &str) -> PathBuf {
     root
 }
 
-fn check(root: &Path) -> (bool, String) {
+fn check_args(root: &Path, args: &[&str]) -> (i32, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_btt"))
-        .arg("check")
+        .args(args)
         .current_dir(root)
         .output()
         .unwrap();
     (
-        out.status.success(),
+        out.status.code().unwrap(),
         String::from_utf8_lossy(&out.stdout).into_owned(),
     )
+}
+
+fn check(root: &Path) -> (bool, String) {
+    let (code, stdout) = check_args(root, &["check"]);
+    (code == 0, stdout)
 }
 
 fn check_path(root: &Path, path: &str) -> (bool, String) {
@@ -105,5 +110,93 @@ mod when_checking_a_monorepo_from_the_root {
         let (ok, stdout) = check_path(&root, "web");
         assert!(ok, "{stdout}");
         assert!(stdout.contains("✓ web/map.tree"), "{stdout}");
+    }
+
+    #[test]
+    fn preserves_the_human_output_byte_for_byte() {
+        let root = fixture("human-golden");
+        let (code, stdout) = check_args(&root, &["check"]);
+        assert_eq!(code, 0);
+        assert_eq!(
+            stdout,
+            "✓ core/map.tree (map.rs)\n✓ web/map.tree (map.test.ts)\n\n2 tree file(s), 1 uncovered, 0 error(s), 0 warning(s)\n"
+        );
+    }
+
+    #[test]
+    fn emits_a_structured_clean_result() {
+        let root = fixture("json-clean");
+        let (code, stdout) = check_args(&root, &["check", "--format", "json"]);
+        assert_eq!(code, 0, "{stdout}");
+        let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(json["summary"]["tree_files"], 2);
+        assert_eq!(json["summary"]["errors"], 0);
+        assert_eq!(json["results"][0]["tree"], "core/map.tree");
+        assert_eq!(json["results"][0]["target"], "core/map.rs");
+        assert_eq!(json["results"][0]["status"], "pass");
+        assert_eq!(json["results"][0]["findings"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn emits_structured_findings_and_preserves_the_exit_code() {
+        let root = fixture("json-findings");
+        std::fs::write(
+            root.join("web/map.test.ts"),
+            "describe(\"map\", () => {\n  test.each([[1]])(\"parameterized\", () => {});\n  it(\"is extra\", () => {});\n});\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("web/btt.toml"),
+            "[project]\npacks = [\"typescript\"]\n\n[check]\nextra = \"warn\"\nuncovered = \"ignore\"\nunsupported = \"error\"\n",
+        )
+        .unwrap();
+
+        let (human_code, _) = check_args(&root, &["check", "--format", "human"]);
+        let (json_code, stdout) = check_args(&root, &["check", "--format", "json"]);
+        assert_eq!(json_code, human_code);
+        assert_eq!(json_code, 1, "{stdout}");
+        let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(json["summary"]["findings"]["unsupported"]["error"], 1);
+        assert_eq!(json["summary"]["warnings"], 1);
+        assert_eq!(json["summary"]["findings"]["extra"]["warn"], 1);
+        let findings = json["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|result| result["findings"].as_array().unwrap())
+            .collect::<Vec<_>>();
+        let extra = findings
+            .iter()
+            .find(|finding| finding["kind"] == "extra")
+            .unwrap();
+        assert_eq!(extra["file"], "web/map.test.ts");
+        let unsupported = findings
+            .iter()
+            .find(|finding| finding["kind"] == "unsupported")
+            .unwrap();
+        assert_eq!(unsupported["severity"], "error");
+        assert_eq!(unsupported["file"], "web/map.test.ts");
+        assert_eq!(unsupported["line"], 2);
+    }
+
+    #[test]
+    fn emits_json_for_setup_failures() {
+        for (name, config) in [
+            ("invalid-config", "not valid toml = ["),
+            ("missing-pack", "[project]\npacks = [\"does-not-exist\"]\n"),
+        ] {
+            let root = fixture(name);
+            std::fs::write(root.join("btt.toml"), config).unwrap();
+            let (code, stdout) = check_args(&root, &["check", "--format", "json"]);
+            assert_eq!(code, 2, "{name}: {stdout}");
+            let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+            assert!(
+                json["error"]
+                    .as_str()
+                    .is_some_and(|error| !error.is_empty())
+            );
+            assert_eq!(json["summary"]["tree_files"], 0);
+            assert_eq!(json["results"], serde_json::json!([]));
+        }
     }
 }

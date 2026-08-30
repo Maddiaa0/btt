@@ -3,6 +3,7 @@
 
 pub mod check;
 pub mod config;
+pub mod diff;
 pub mod error;
 pub mod extract;
 mod lexical;

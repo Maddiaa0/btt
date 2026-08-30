@@ -3,11 +3,14 @@ use btt::check::Finding;
 use btt::config::{self, Level};
 use btt::extract::ActualKind;
 use btt::runner;
-use btt::{check, pack, scaffold, tree};
-use clap::{Parser, Subcommand};
+use btt::{check, diff, pack, scaffold, tree};
+use clap::{Parser, Subcommand, ValueEnum};
+use serde::Serialize;
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command as ProcessCommand, ExitCode};
 
 mod pack_add;
 
@@ -27,6 +30,20 @@ enum Command {
         /// Number of files to check in parallel (default: one per core).
         #[arg(short, long)]
         jobs: Option<NonZeroUsize>,
+        /// Output format.
+        #[arg(long, value_enum, default_value_t)]
+        format: OutputFormat,
+    },
+    /// Compare behaviors in .tree specs between Git revisions.
+    Diff {
+        /// Revision or revision range (`REV` means `REV..working tree`).
+        revisions: String,
+        /// Exit 1 when differences exist.
+        #[arg(long)]
+        exit_code: bool,
+        /// Output format.
+        #[arg(long, value_enum, default_value_t)]
+        format: OutputFormat,
     },
     /// Generate a test-file skeleton from a .tree spec.
     Scaffold {
@@ -63,6 +80,13 @@ enum Command {
     },
 }
 
+#[derive(Clone, Copy, Default, ValueEnum)]
+enum OutputFormat {
+    #[default]
+    Human,
+    Json,
+}
+
 #[derive(Subcommand)]
 enum PackCommand {
     /// Add one pack from a local directory or Git repository.
@@ -80,12 +104,52 @@ enum PackCommand {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    let json = cli.json_requested();
+    let diff_json = cli.diff_json_requested();
     match run(cli) {
         Ok(code) => code,
         Err(err) => {
-            eprintln!("error: {err:#}");
+            if json {
+                let serialized = if diff_json {
+                    serde_json::to_string(&DiffJsonReport::error(format!("{err:#}")))
+                } else {
+                    serde_json::to_string(&JsonReport::error(format!("{err:#}")))
+                };
+                println!(
+                    "{}",
+                    serialized
+                        .unwrap_or_else(|_| r#"{"error":"failed to serialize error"}"#.to_string())
+                );
+            } else {
+                eprintln!("error: {err:#}");
+            }
             ExitCode::from(2)
         }
+    }
+}
+
+impl Cli {
+    fn json_requested(&self) -> bool {
+        matches!(
+            self.command,
+            Command::Check {
+                format: OutputFormat::Json,
+                ..
+            } | Command::Diff {
+                format: OutputFormat::Json,
+                ..
+            }
+        )
+    }
+
+    fn diff_json_requested(&self) -> bool {
+        matches!(
+            self.command,
+            Command::Diff {
+                format: OutputFormat::Json,
+                ..
+            }
+        )
     }
 }
 
@@ -94,7 +158,16 @@ fn run(cli: Cli) -> Result<ExitCode> {
     let root = config::find_project_root(&cwd);
 
     match cli.command {
-        Command::Check { paths, jobs } => cmd_check(&paths, jobs, &root),
+        Command::Check {
+            paths,
+            jobs,
+            format,
+        } => cmd_check(&paths, jobs, format, &root),
+        Command::Diff {
+            revisions,
+            exit_code,
+            format,
+        } => cmd_diff(&revisions, exit_code, format, &cwd),
         Command::Scaffold {
             tree,
             pack,
@@ -111,6 +184,259 @@ fn run(cli: Cli) -> Result<ExitCode> {
         },
         Command::Init { skill } => cmd_init(&root, skill),
     }
+}
+
+#[derive(Default, Serialize)]
+struct DiffJsonSummary {
+    tree_files: usize,
+    added: usize,
+    removed: usize,
+    renamed: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum DiffStatus {
+    Added,
+    Removed,
+    Changed,
+}
+
+#[derive(Serialize)]
+struct DiffJsonResult {
+    tree: String,
+    status: DiffStatus,
+    added: Vec<String>,
+    removed: Vec<String>,
+    renamed: Vec<diff::Rename>,
+}
+
+#[derive(Serialize)]
+struct DiffJsonReport {
+    summary: DiffJsonSummary,
+    results: Vec<DiffJsonResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+impl DiffJsonReport {
+    fn error(error: String) -> Self {
+        Self {
+            summary: DiffJsonSummary::default(),
+            results: Vec::new(),
+            error: Some(error),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum DiffSide<'a> {
+    Revision(&'a str),
+    Working,
+}
+
+fn cmd_diff(
+    revisions: &str,
+    exit_code: bool,
+    format: OutputFormat,
+    cwd: &Path,
+) -> Result<ExitCode> {
+    let repo = git_repo_root(cwd)?;
+    let (old, new) = match revisions.split_once("..") {
+        Some((old, new)) if !old.is_empty() && !new.is_empty() && !new.contains("..") => {
+            (DiffSide::Revision(old), DiffSide::Revision(new))
+        }
+        Some(_) => bail!("revision range must be REV..REV"),
+        None => (DiffSide::Revision(revisions), DiffSide::Working),
+    };
+    if revisions.is_empty() {
+        bail!("revision must not be empty");
+    }
+    let old_files = read_diff_side(&repo, old)?;
+    let new_files = read_diff_side(&repo, new)?;
+    let paths: std::collections::BTreeSet<_> =
+        old_files.keys().chain(new_files.keys()).cloned().collect();
+    let mut report = DiffJsonReport {
+        summary: DiffJsonSummary::default(),
+        results: Vec::new(),
+        error: None,
+    };
+    for path in paths {
+        let (status, changes) = match (old_files.get(&path), new_files.get(&path)) {
+            (Some(old), Some(new)) => {
+                let old =
+                    tree::parse(old).with_context(|| format!("parsing {path} on old side"))?;
+                let new =
+                    tree::parse(new).with_context(|| format!("parsing {path} on new side"))?;
+                let changes = diff::compare(&old, &new);
+                if changes.is_empty() {
+                    continue;
+                }
+                (DiffStatus::Changed, changes)
+            }
+            (None, Some(new)) => (
+                DiffStatus::Added,
+                diff::Changes {
+                    added: behavior_paths(new, &path, "new")?,
+                    ..diff::Changes::default()
+                },
+            ),
+            (Some(old), None) => (
+                DiffStatus::Removed,
+                diff::Changes {
+                    removed: behavior_paths(old, &path, "old")?,
+                    ..diff::Changes::default()
+                },
+            ),
+            (None, None) => unreachable!(),
+        };
+        report.summary.added += changes.added.len();
+        report.summary.removed += changes.removed.len();
+        report.summary.renamed += changes.renamed.len();
+        report.results.push(DiffJsonResult {
+            tree: path,
+            status,
+            added: changes.added,
+            removed: changes.removed,
+            renamed: changes.renamed,
+        });
+    }
+    report.summary.tree_files = report.results.len();
+    let different = !report.results.is_empty();
+    match format {
+        OutputFormat::Json => println!("{}", serde_json::to_string(&report)?),
+        OutputFormat::Human => render_diff_human(&report),
+    }
+    Ok(if exit_code && different {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    })
+}
+
+fn behavior_paths(source: &str, path: &str, side: &str) -> Result<Vec<String>> {
+    let trees = tree::parse(source).with_context(|| format!("parsing {path} on {side} side"))?;
+    Ok(diff::compare(&[], &trees).added)
+}
+
+fn render_diff_human(report: &DiffJsonReport) {
+    for result in &report.results {
+        let label = match result.status {
+            DiffStatus::Added => "ADDED",
+            DiffStatus::Removed => "REMOVED",
+            DiffStatus::Changed => "CHANGED",
+        };
+        println!("{label} {}", result.tree);
+        for rename in &result.renamed {
+            println!("  ~ {} -> {}", rename.from, rename.to);
+        }
+        for path in &result.removed {
+            println!("  - {path}");
+        }
+        for path in &result.added {
+            println!("  + {path}");
+        }
+    }
+    println!(
+        "\n{} tree file(s) changed, {} added, {} removed, {} renamed",
+        report.summary.tree_files,
+        report.summary.added,
+        report.summary.removed,
+        report.summary.renamed
+    );
+}
+
+fn git_repo_root(cwd: &Path) -> Result<PathBuf> {
+    let output = ProcessCommand::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(cwd)
+        .output()
+        .context("running git rev-parse")?;
+    if !output.status.success() {
+        bail!(
+            "not a git repository: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(PathBuf::from(String::from_utf8(output.stdout)?.trim()))
+}
+
+fn read_diff_side(repo: &Path, side: DiffSide<'_>) -> Result<BTreeMap<String, String>> {
+    match side {
+        DiffSide::Working => {
+            let files = runner::find_tree_files(&[repo.to_path_buf()])?;
+            files
+                .into_iter()
+                .map(|path| {
+                    let relative = path
+                        .strip_prefix(repo)
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    let source = std::fs::read_to_string(&path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    Ok((relative, source))
+                })
+                .collect()
+        }
+        DiffSide::Revision(revision) => read_revision(repo, revision),
+    }
+}
+
+fn read_revision(repo: &Path, revision: &str) -> Result<BTreeMap<String, String>> {
+    let object_id = resolve_revision(repo, revision)?;
+    let output = ProcessCommand::new("git")
+        .args(["ls-tree", "-r", "--name-only", &object_id, "--"])
+        .current_dir(repo)
+        .output()
+        .with_context(|| format!("listing revision {revision}"))?;
+    if !output.status.success() {
+        bail!(
+            "cannot read revision {revision}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let names = String::from_utf8(output.stdout)?;
+    let mut files = BTreeMap::new();
+    for path in names.lines().filter(|path| is_discovered_tree(path)) {
+        let object = format!("{object_id}:{path}");
+        let shown = ProcessCommand::new("git")
+            .args(["show", &object, "--"])
+            .current_dir(repo)
+            .output()
+            .with_context(|| format!("reading {path} at {revision}"))?;
+        if !shown.status.success() {
+            bail!(
+                "cannot read {path} at {revision}: {}",
+                String::from_utf8_lossy(&shown.stderr).trim()
+            );
+        }
+        files.insert(path.to_string(), String::from_utf8(shown.stdout)?);
+    }
+    Ok(files)
+}
+
+fn resolve_revision(repo: &Path, revision: &str) -> Result<String> {
+    let commit = format!("{revision}^{{commit}}");
+    let output = ProcessCommand::new("git")
+        .args(["rev-parse", "--verify", "--end-of-options", &commit])
+        .current_dir(repo)
+        .output()
+        .with_context(|| format!("resolving revision {revision}"))?;
+    if !output.status.success() {
+        bail!(
+            "cannot resolve revision {revision}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8(output.stdout)?.trim().to_string())
+}
+
+fn is_discovered_tree(path: &str) -> bool {
+    Path::new(path).extension().is_some_and(|ext| ext == "tree")
+        && !path
+            .split('/')
+            .any(|part| matches!(part, ".git" | "target" | "node_modules"))
 }
 
 /// Load the project's configured packs; with no `packs = [...]`, only the
@@ -159,6 +485,113 @@ struct FileReport {
     lines: Vec<String>,
     errors: usize,
     warnings: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum FindingKind {
+    Missing,
+    Extra,
+    OutOfOrder,
+    Unsupported,
+    Uncovered,
+    NoTarget,
+    CheckFailed,
+    ScanFailed,
+}
+
+#[derive(Serialize)]
+struct JsonFinding {
+    kind: FindingKind,
+    severity: Level,
+    message: String,
+    tree_path: Option<String>,
+    file: String,
+    line: Option<usize>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum JsonStatus {
+    Pass,
+    Fail,
+}
+
+#[derive(Serialize)]
+struct JsonResult {
+    tree: Option<String>,
+    target: Option<String>,
+    status: JsonStatus,
+    findings: Vec<JsonFinding>,
+}
+
+#[derive(Default, Serialize)]
+struct JsonSummary {
+    tree_files: usize,
+    uncovered: usize,
+    errors: usize,
+    warnings: usize,
+    findings: BTreeMap<FindingKind, BTreeMap<Level, usize>>,
+}
+
+#[derive(Serialize)]
+struct JsonReport {
+    summary: JsonSummary,
+    results: Vec<JsonResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+impl JsonReport {
+    fn new(tree_files: usize) -> Self {
+        Self {
+            summary: JsonSummary {
+                tree_files,
+                ..JsonSummary::default()
+            },
+            results: Vec::new(),
+            error: None,
+        }
+    }
+
+    fn error(error: String) -> Self {
+        Self {
+            error: Some(error),
+            ..Self::new(0)
+        }
+    }
+
+    fn push(&mut self, result: JsonResult) {
+        for finding in &result.findings {
+            *self
+                .summary
+                .findings
+                .entry(finding.kind)
+                .or_default()
+                .entry(finding.severity)
+                .or_default() += 1;
+        }
+        self.summary.errors = self.summary.count_serialized_severity("error");
+        self.summary.warnings = self.summary.count_serialized_severity("warn");
+        self.results.push(result);
+    }
+}
+
+impl JsonSummary {
+    fn count_serialized_severity(&self, wanted: &str) -> usize {
+        self.findings
+            .values()
+            .flat_map(BTreeMap::iter)
+            .filter(|(severity, _)| {
+                serde_json::to_value(severity)
+                    .ok()
+                    .and_then(|value| value.as_str().map(str::to_owned))
+                    .as_deref()
+                    == Some(wanted)
+            })
+            .map(|(_, count)| count)
+            .sum()
+    }
 }
 
 /// Config and packs governing one subtree (the reach of one `btt.toml`).
@@ -215,7 +648,12 @@ fn subtree_roots(search: &[PathBuf], tree_files: &[PathBuf], root: &Path) -> Res
     Ok(roots.into_iter().collect())
 }
 
-fn cmd_check(paths: &[PathBuf], jobs: Option<NonZeroUsize>, root: &Path) -> Result<ExitCode> {
+fn cmd_check(
+    paths: &[PathBuf],
+    jobs: Option<NonZeroUsize>,
+    format: OutputFormat,
+    root: &Path,
+) -> Result<ExitCode> {
     let search = if paths.is_empty() {
         vec![root.to_path_buf()]
     } else {
@@ -280,12 +718,27 @@ fn cmd_check(paths: &[PathBuf], jobs: Option<NonZeroUsize>, root: &Path) -> Resu
             scan.uncovered.is_empty() && scan.unsupported.is_empty() && scan.failed.is_empty()
         })
     {
-        println!("no .tree files found");
+        match format {
+            OutputFormat::Human => println!("no .tree files found"),
+            OutputFormat::Json => println!("{}", serde_json::to_string(&JsonReport::new(0))?),
+        }
         return Ok(ExitCode::SUCCESS);
     }
 
+    if matches!(format, OutputFormat::Json) {
+        return render_json(&tree_files, &outcomes, &scans, root);
+    }
+    Ok(render_human(&tree_files, &outcomes, &scans, root))
+}
+
+fn render_human(
+    tree_files: &[PathBuf],
+    outcomes: &[runner::FileOutcome],
+    scans: &[(Level, Level, runner::UncoveredScan)],
+    root: &Path,
+) -> ExitCode {
     let (mut errors, mut warnings) = (0usize, 0usize);
-    for outcome in &outcomes {
+    for outcome in outcomes {
         let report = render(outcome, root);
         errors += report.errors;
         warnings += report.warnings;
@@ -294,7 +747,7 @@ fn cmd_check(paths: &[PathBuf], jobs: Option<NonZeroUsize>, root: &Path) -> Resu
         }
     }
     let mut uncovered = 0usize;
-    for (uncovered_level, unsupported_level, scan) in &scans {
+    for (uncovered_level, unsupported_level, scan) in scans {
         uncovered += scan.uncovered.len();
         let scan_report = render_scan(scan, *uncovered_level, *unsupported_level, root);
         errors += scan_report.errors;
@@ -319,13 +772,201 @@ fn cmd_check(paths: &[PathBuf], jobs: Option<NonZeroUsize>, root: &Path) -> Resu
         || outcomes
             .iter()
             .any(|o| matches!(o.result, runner::FileResult::Failed(_)));
-    Ok(if failed {
+    if failed {
         ExitCode::from(2)
     } else if errors > 0 {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
-    })
+    }
+}
+
+fn shown_path(path: &Path, root: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .display()
+        .to_string()
+}
+
+fn finding_json(
+    reported: &runner::Reported,
+    tree: &Path,
+    target: &Path,
+    root: &Path,
+) -> JsonFinding {
+    let (kind, message, tree_path, file, line) = match &reported.finding {
+        Finding::Missing {
+            path, spec_line, ..
+        } => (
+            FindingKind::Missing,
+            describe(&reported.finding, tree, target),
+            Some(path.clone()),
+            tree.display().to_string(),
+            Some(*spec_line),
+        ),
+        Finding::Extra {
+            path, target_line, ..
+        } => (
+            FindingKind::Extra,
+            describe(&reported.finding, tree, target),
+            Some(path.clone()),
+            shown_path(target, root),
+            Some(*target_line),
+        ),
+        Finding::OutOfOrder { path } => (
+            FindingKind::OutOfOrder,
+            describe(&reported.finding, tree, target),
+            Some(path.clone()),
+            shown_path(target, root),
+            None,
+        ),
+        Finding::Unsupported { target_line } => (
+            FindingKind::Unsupported,
+            describe(&reported.finding, tree, target),
+            None,
+            shown_path(target, root),
+            Some(*target_line),
+        ),
+    };
+    JsonFinding {
+        kind,
+        severity: reported.level,
+        message,
+        tree_path,
+        file,
+        line,
+    }
+}
+
+fn render_json(
+    tree_files: &[PathBuf],
+    outcomes: &[runner::FileOutcome],
+    scans: &[(Level, Level, runner::UncoveredScan)],
+    root: &Path,
+) -> Result<ExitCode> {
+    let mut report = JsonReport::new(tree_files.len());
+    let mut tool_failed = false;
+    for outcome in outcomes {
+        tool_failed |= add_json_outcome(&mut report, outcome, root);
+    }
+    for (uncovered_level, unsupported_level, scan) in scans {
+        tool_failed |= add_json_scan(
+            &mut report,
+            scan,
+            *uncovered_level,
+            *unsupported_level,
+            root,
+        );
+    }
+    let exit = if tool_failed {
+        ExitCode::from(2)
+    } else if report.summary.errors > 0 {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    };
+    println!("{}", serde_json::to_string(&report)?);
+    Ok(exit)
+}
+
+fn add_json_outcome(report: &mut JsonReport, outcome: &runner::FileOutcome, root: &Path) -> bool {
+    let tree = shown_path(&outcome.tree_path, root);
+    let (target, findings, tool_failed) = match &outcome.result {
+        runner::FileResult::Checked { target, findings } => (
+            Some(shown_path(target, root)),
+            findings
+                .iter()
+                .map(|finding| finding_json(finding, Path::new(&tree), target, root))
+                .collect(),
+            false,
+        ),
+        runner::FileResult::NoTarget { candidates } => {
+            let mut message = "no matching test file".to_string();
+            for candidate in candidates.iter().take(4) {
+                _ = write!(message, "\ntried {}", candidate.display());
+            }
+            _ = write!(message, "\nhint: btt scaffold {tree}");
+            (
+                None,
+                vec![JsonFinding {
+                    kind: FindingKind::NoTarget,
+                    severity: Level::Error,
+                    message,
+                    tree_path: None,
+                    file: tree.clone(),
+                    line: None,
+                }],
+                false,
+            )
+        }
+        runner::FileResult::Failed(error) => (
+            None,
+            vec![JsonFinding {
+                kind: FindingKind::CheckFailed,
+                severity: Level::Error,
+                message: error.to_string(),
+                tree_path: None,
+                file: tree.clone(),
+                line: None,
+            }],
+            true,
+        ),
+    };
+    report.push(JsonResult {
+        tree: Some(tree),
+        target,
+        status: if findings.is_empty() {
+            JsonStatus::Pass
+        } else {
+            JsonStatus::Fail
+        },
+        findings,
+    });
+    tool_failed
+}
+
+fn add_json_scan(
+    report: &mut JsonReport,
+    scan: &runner::UncoveredScan,
+    uncovered_level: Level,
+    unsupported_level: Level,
+    root: &Path,
+) -> bool {
+    report.summary.uncovered += scan.uncovered.len();
+    if uncovered_level != Level::Ignore {
+        for uncovered in &scan.uncovered {
+            report.push(JsonResult { tree: None, target: None, status: JsonStatus::Fail, findings: vec![JsonFinding {
+                kind: FindingKind::Uncovered, severity: uncovered_level,
+                message: format!("{} test(s), not covered by any .tree\nhint: write a .tree next to each file mirroring its tests", uncovered.tests),
+                tree_path: None, file: shown_path(&uncovered.path, root), line: None,
+            }] });
+        }
+    }
+    if unsupported_level != Level::Ignore {
+        for unsupported in &scan.unsupported {
+            report.push(JsonResult { tree: None, target: None, status: JsonStatus::Fail, findings: vec![JsonFinding {
+                kind: FindingKind::Unsupported, severity: unsupported_level,
+                message: "unsupported: parameterized test (test.each) is not representable — expand into explicit leaves (see AGENT-SETUP)".to_string(),
+                tree_path: None, file: shown_path(&unsupported.path, root), line: Some(unsupported.line),
+            }] });
+        }
+    }
+    for (path, error) in &scan.failed {
+        report.push(JsonResult {
+            tree: None,
+            target: None,
+            status: JsonStatus::Fail,
+            findings: vec![JsonFinding {
+                kind: FindingKind::ScanFailed,
+                severity: Level::Error,
+                message: format!("coverage scan failed: {error}"),
+                tree_path: None,
+                file: shown_path(path, root),
+                line: None,
+            }],
+        });
+    }
+    !scan.failed.is_empty()
 }
 
 /// Render the uncovered scan: files needing specs at their configured

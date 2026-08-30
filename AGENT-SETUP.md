@@ -35,9 +35,10 @@ test code is checked against) from this repo:
    see the installed SKILL.md for the full worker/reviewer/manager protocols).
    Explain that trees cover per-module unit tests, integration surfaces
    (e.g. tests/api.tree <-> tests/api.rs), and must-never-break properties in
-   invariants.tree mapped to integration/property tests. If a guarantee matters
-   enough to state in a PR description, it belongs as a leaf. Then run
-   `btt check` and walk me through the output. Fix or explain its findings.
+   invariants.tree mapped to integration/property tests and placed beside a
+   same-stem test file the pack matches. If a guarantee matters enough to state
+   in a PR description, it belongs as a leaf. Then run `btt check` and walk me
+   through the output. Fix or explain its findings.
 
 5. Suggest where to wire `btt check` into CI or a pre-commit hook (it exits
    non-zero on errors), but don't add it without asking me.

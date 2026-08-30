@@ -17,8 +17,10 @@ language between worker, reviewer, and manager.
   `tests/api.tree` ↔ `tests/api.rs`, describing cross-module behavior. btt
   dogfoods this pattern with its own `tests/*.tree` files.
 - **Invariants:** a dedicated `invariants.tree` whose leaves are
-  must-never-break properties, mapped to integration/property tests. If a
-  guarantee matters enough to state in a PR description, it belongs as a leaf.
+  must-never-break properties, mapped to integration/property tests. Like any
+  tree, it sits beside a same-stem test file matched by the pack, such as
+  `tests/invariants.rs` or `invariants.test.ts`. If a guarantee matters enough
+  to state in a PR description, it belongs as a leaf.
 
 ```text
 Booking invariants
@@ -69,8 +71,8 @@ After:  ├── it accepts a representative valid card
   index; (b) read the tree-diff — the behavioral delta; (c) read the new leaf
   bodies — assertion strength; (d) read the load-bearing code hunks; (e)
   behavioral smoke test.
-- `N trees, 0 uncovered, 0 errors` is the reporting contract: workers quote
-  it, managers reproduce it.
+- `N tree file(s), 0 uncovered, 0 error(s), 0 warning(s)` is the reporting
+  contract: workers quote the check summary line verbatim; managers reproduce it.
 - The green check SCOPES the reading, it never replaces it.
 
 ## .tree format

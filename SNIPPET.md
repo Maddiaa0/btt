@@ -14,8 +14,9 @@ language between worker, reviewer, and manager.
 - **Cover every tier.** Keep per-module unit trees; add one tree per
   integration surface (`tests/api.tree` ↔ `tests/api.rs`) for cross-module
   behavior; keep must-never-break properties in `invariants.tree`, mapped to
-  integration/property tests. If a guarantee matters enough to state in a PR
-  description, it belongs as a leaf.
+  integration/property tests, beside a same-stem test file the pack matches.
+  If a guarantee matters enough to state in a PR description, it belongs as a
+  leaf.
 - **Worker: spec first.** Add or update the `.tree` before touching test code —
   new behavior is a new `when …`/`given …` branch with `it …` leaves. Never
   add a test the tree doesn't describe or delete spec lines to go green.
@@ -35,6 +36,7 @@ language between worker, reviewer, and manager.
   tree-diff matches the change's claimed scope.
 - **Fix rounds and management.** Turn each accepted finding into named tree
   branches before code; report completion as the tree-diff. Workers quote and
-  managers reproduce `N trees, 0 uncovered, 0 errors`. A green check scopes
-  the reading; it never replaces review of the tree-diff, leaf assertions,
-  load-bearing code, and a behavioral smoke test.
+  managers reproduce the check summary line
+  `N tree file(s), 0 uncovered, 0 error(s), 0 warning(s)` verbatim. A green
+  check scopes the reading; it never replaces review of the tree-diff, leaf
+  assertions, load-bearing code, and a behavioral smoke test.

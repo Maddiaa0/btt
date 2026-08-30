@@ -17,7 +17,11 @@ use crate::extract::{self, ActualKind, SourceNode};
 use crate::pack::Pack;
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -131,6 +135,7 @@ pub fn merge(
     stem: &str,
     in_tests_dir: bool,
 ) -> Result<String> {
+    let newline = newline_sequence(source)?;
     let extraction = extract::extract_with_findings(pack, target, source)?;
     if extraction.has_parse_errors {
         return Err(Error::Merge {
@@ -154,6 +159,7 @@ pub fn merge(
         stem,
         in_tests_dir,
         indent_unit.as_deref(),
+        newline,
         &mut edits,
     )?;
     let mut out =
@@ -166,6 +172,59 @@ pub fn merge(
     }
     out.push_str(&source[at..]);
     Ok(out)
+}
+
+/// Replace an existing scaffold target through a same-directory temporary
+/// file, preserving its permissions.
+///
+/// # Errors
+///
+/// Fails if metadata, temporary-file creation/writing, or rename fails. The
+/// original target is untouched unless the final atomic rename succeeds.
+pub fn write_atomic(path: &Path, contents: &str) -> Result<()> {
+    let metadata = std::fs::metadata(path).map_err(|source| Error::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("btt");
+    let mut last_error = None;
+    for _ in 0..100 {
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let temp = parent.join(format!(".{name}.btt-{}-{sequence}.tmp", std::process::id()));
+        let opened = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp);
+        let mut file = match opened {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                last_error = Some(error);
+                continue;
+            }
+            Err(source) => return Err(Error::Io { path: temp, source }),
+        };
+        let result = (|| {
+            std::fs::set_permissions(&temp, metadata.permissions())?;
+            file.write_all(contents.as_bytes())?;
+            file.flush()?;
+            file.sync_all()?;
+            drop(file);
+            std::fs::rename(&temp, path)
+        })();
+        if let Err(source) = result {
+            drop(std::fs::remove_file(&temp));
+            return Err(Error::Io { path: temp, source });
+        }
+        return Ok(());
+    }
+    Err(Error::Io {
+        path: path.to_path_buf(),
+        source: last_error.unwrap_or_else(|| std::io::Error::other("temporary name exhaustion")),
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -208,6 +267,7 @@ fn plan_children(
     stem: &str,
     in_tests_dir: bool,
     indent_unit: Option<&str>,
+    newline: &str,
     edits: &mut BTreeMap<usize, String>,
 ) -> Result<()> {
     let mut previous = None;
@@ -250,13 +310,23 @@ fn plan_children(
                     stem,
                     in_tests_dir,
                     indent_unit,
+                    newline,
                     edits,
                 )?;
             }
         } else {
             let (pos, indent) = insertion_point(previous, actual, parent, source, indent_unit)?;
-            let snippet = render_node(pack, wanted, target_indent(&indent), stem, in_tests_dir)?;
-            edits.entry(pos).or_default().push_str(&snippet);
+            let snippet = render_node(pack, wanted, target_indent(&indent), stem, in_tests_dir)?
+                .replace('\n', newline);
+            let insertion = edits.entry(pos).or_default();
+            if insertion.is_empty()
+                && pos == source.len()
+                && !source.is_empty()
+                && !source.ends_with('\n')
+            {
+                insertion.push_str(newline);
+            }
+            insertion.push_str(&snippet);
         }
     }
     Ok(())
@@ -287,12 +357,28 @@ fn insertion_point(
         return Ok((close, indent));
     }
     let pos = source.len();
-    if !source.is_empty() && !source.ends_with('\n') {
+    Ok((pos, String::new()))
+}
+
+fn newline_sequence(source: &str) -> Result<&'static str> {
+    let bytes = source.as_bytes();
+    let mut crlf = false;
+    let mut bare_lf = false;
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte == b'\n' {
+            if index > 0 && bytes[index - 1] == b'\r' {
+                crlf = true;
+            } else {
+                bare_lf = true;
+            }
+        }
+    }
+    if crlf && bare_lf {
         return Err(Error::Merge {
-            message: "top-level append is not on a fresh line".into(),
+            message: "the file contains mixed CRLF and LF line endings".into(),
         });
     }
-    Ok((pos, String::new()))
+    Ok(if crlf { "\r\n" } else { "\n" })
 }
 
 fn render_node(

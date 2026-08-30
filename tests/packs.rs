@@ -351,6 +351,99 @@ mod when_merging_a_scaffold {
         assert!(error.to_string().contains("syntax errors"), "{error}");
         assert!(error.to_string().contains("merge manually"), "{error}");
     }
+
+    #[test]
+    fn merges_rust_and_typescript_siblings_after_a_non_newline_eof() {
+        let rust = pack::load("rust", repo_root()).unwrap();
+        let rust_spec = "Map\n├── it existing\n└── it added\n";
+        let rust_source = "#[test]\nfn existing() {}";
+        let rust_merged = scaffold::merge(
+            &rust,
+            &expected(&rust, rust_spec),
+            Path::new("tests/map.rs"),
+            rust_source,
+            "map",
+            true,
+        )
+        .unwrap();
+        assert!(
+            rust_merged.contains("{}\n#[test]\nfn added()"),
+            "{rust_merged}"
+        );
+        let actual = extract::extract(&rust, Path::new("tests/map.rs"), &rust_merged).unwrap();
+        assert!(check::diff(&expected(&rust, rust_spec), &actual).is_empty());
+
+        let ts = pack::load("typescript", repo_root()).unwrap();
+        let ts_spec = "First\n└── it existing\n\nSecond\n└── it added\n";
+        let ts_source = "describe(\"First\", () => { it(\"existing\", () => {}); });";
+        let ts_merged = scaffold::merge(
+            &ts,
+            &expected(&ts, ts_spec),
+            Path::new("map.test.ts"),
+            ts_source,
+            "map",
+            false,
+        )
+        .unwrap();
+        assert!(ts_merged.contains(");\ndescribe(\"Second\""), "{ts_merged}");
+        let actual = extract::extract(&ts, Path::new("map.test.ts"), &ts_merged).unwrap();
+        assert!(check::diff(&expected(&ts, ts_spec), &actual).is_empty());
+    }
+
+    #[test]
+    fn preserves_crlf_and_refuses_mixed_newlines() {
+        let pack = pack::load("typescript", repo_root()).unwrap();
+        let spec = "Map\n├── it existing\n└── it added\n";
+        let crlf = "describe(\"Map\", () => {\r\n  it(\"existing\", () => {});\r\n});\r\n";
+        let merged = scaffold::merge(
+            &pack,
+            &expected(&pack, spec),
+            Path::new("map.test.ts"),
+            crlf,
+            "map",
+            false,
+        )
+        .unwrap();
+        assert!(merged.contains("\r\n  it(\"added\""), "{merged:?}");
+        assert!(!merged.replace("\r\n", "").contains('\n'), "{merged:?}");
+
+        let mixed = "describe(\"Map\", () => {\r\n  it(\"existing\", () => {});\n});\r\n";
+        let error = scaffold::merge(
+            &pack,
+            &expected(&pack, spec),
+            Path::new("map.test.ts"),
+            mixed,
+            "map",
+            false,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("mixed CRLF and LF"), "{error}");
+        assert!(error.to_string().contains("merge manually"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomically_replaces_while_preserving_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = repo_root().join("target/atomic-merge-fixture");
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("map.rs");
+        std::fs::write(&target, "old").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+        scaffold::write_atomic(&target, "new contents").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new contents");
+        assert_eq!(
+            std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".btt-"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
 }
 
 mod when_checking_scaffold_markers {

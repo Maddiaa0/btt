@@ -19,7 +19,10 @@ language packs
 │   ├── it inserts rust leaves and blocks without changing existing bytes
 │   ├── it inserts typescript leaves in sibling order and is idempotent
 │   ├── it fails closed on ambiguous duplicates
-│   └── it fails closed on syntax errors
+│   ├── it fails closed on syntax errors
+│   ├── it merges rust and typescript siblings after a non newline EOF
+│   ├── it preserves CRLF and refuses mixed newlines
+│   └── it atomically replaces while preserving permissions
 ├── when checking scaffold markers
 │   ├── it reports each marker at its source line with the default severity
 │   ├── it clears a finding when its marker is removed

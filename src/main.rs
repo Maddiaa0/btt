@@ -567,8 +567,12 @@ fn cmd_scaffold(
             out_path.display()
         );
     }
-    std::fs::write(&out_path, rendered)
-        .with_context(|| format!("writing {}", out_path.display()))?;
+    if merge {
+        scaffold::write_atomic(&out_path, &rendered)?;
+    } else {
+        std::fs::write(&out_path, rendered)
+            .with_context(|| format!("writing {}", out_path.display()))?;
+    }
     println!(
         "{} {} ({} tests) from {}",
         if merge { "merged" } else { "scaffolded" },

@@ -142,12 +142,12 @@ mod when_checking_a_monorepo_from_the_root {
         let root = fixture("json-findings");
         std::fs::write(
             root.join("web/map.test.ts"),
-            "describe(\"map\", () => {\n  test.each([[1]])(\"parameterized\", () => {});\n});\n",
+            "describe(\"map\", () => {\n  test.each([[1]])(\"parameterized\", () => {});\n  it(\"is extra\", () => {});\n});\n",
         )
         .unwrap();
         std::fs::write(
             root.join("web/btt.toml"),
-            "[project]\npacks = [\"typescript\"]\n\n[check]\nextra = \"ignore\"\nuncovered = \"ignore\"\nunsupported = \"error\"\n",
+            "[project]\npacks = [\"typescript\"]\n\n[check]\nextra = \"warn\"\nuncovered = \"ignore\"\nunsupported = \"error\"\n",
         )
         .unwrap();
 
@@ -157,20 +157,46 @@ mod when_checking_a_monorepo_from_the_root {
         assert_eq!(json_code, 1, "{stdout}");
         let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
         assert_eq!(json["summary"]["findings"]["unsupported"]["error"], 1);
-        let unsupported = json["results"]
+        assert_eq!(json["summary"]["warnings"], 1);
+        assert_eq!(json["summary"]["findings"]["extra"]["warn"], 1);
+        let findings = json["results"]
             .as_array()
             .unwrap()
             .iter()
             .flat_map(|result| result["findings"].as_array().unwrap())
+            .collect::<Vec<_>>();
+        let extra = findings
+            .iter()
+            .find(|finding| finding["kind"] == "extra")
+            .unwrap();
+        assert_eq!(extra["file"], "web/map.test.ts");
+        let unsupported = findings
+            .iter()
             .find(|finding| finding["kind"] == "unsupported")
             .unwrap();
         assert_eq!(unsupported["severity"], "error");
-        assert!(
-            unsupported["file"]
-                .as_str()
-                .unwrap()
-                .ends_with("/web/map.test.ts")
-        );
+        assert_eq!(unsupported["file"], "web/map.test.ts");
         assert_eq!(unsupported["line"], 2);
+    }
+
+    #[test]
+    fn emits_json_for_setup_failures() {
+        for (name, config) in [
+            ("invalid-config", "not valid toml = ["),
+            ("missing-pack", "[project]\npacks = [\"does-not-exist\"]\n"),
+        ] {
+            let root = fixture(name);
+            std::fs::write(root.join("btt.toml"), config).unwrap();
+            let (code, stdout) = check_args(&root, &["check", "--format", "json"]);
+            assert_eq!(code, 2, "{name}: {stdout}");
+            let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+            assert!(
+                json["error"]
+                    .as_str()
+                    .is_some_and(|error| !error.is_empty())
+            );
+            assert_eq!(json["summary"]["tree_files"], 0);
+            assert_eq!(json["results"], serde_json::json!([]));
+        }
     }
 }

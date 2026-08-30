@@ -6,4 +6,5 @@ nested configs
     ├── it ignores a broken root pack when checking only a nested subtree
     ├── it preserves the human output byte for byte
     ├── it emits a structured clean result
-    └── it emits structured findings and preserves the exit code
+    ├── it emits structured findings and preserves the exit code
+    └── it emits JSON for setup failures

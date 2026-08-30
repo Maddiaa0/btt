@@ -551,6 +551,12 @@ logical `tree_path` when applicable, `file`, and its one-based `line` when
 available. Uncovered files and coverage-scan failures are results with a null
 `tree` and `target`.
 
+If setup fails before files can be checked (for example, an invalid
+`btt.toml` or missing configured pack), the command still writes exactly one
+JSON object to stdout and exits 2. That object has zeroed `summary` counts, an
+empty `results` array, and a top-level `error` string. Successful and
+finding-only reports omit `error`.
+
 ```json
 {
   "summary": {

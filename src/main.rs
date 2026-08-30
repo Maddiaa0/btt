@@ -90,12 +90,35 @@ enum PackCommand {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    let json = cli.json_requested();
     match run(cli) {
         Ok(code) => code,
         Err(err) => {
-            eprintln!("error: {err:#}");
+            if json {
+                let report = JsonReport::error(format!("{err:#}"));
+                println!(
+                    "{}",
+                    serde_json::to_string(&report).unwrap_or_else(|_| {
+                        r#"{"error":"failed to serialize check error"}"#.to_string()
+                    })
+                );
+            } else {
+                eprintln!("error: {err:#}");
+            }
             ExitCode::from(2)
         }
+    }
+}
+
+impl Cli {
+    fn json_requested(&self) -> bool {
+        matches!(
+            self.command,
+            Command::Check {
+                format: OutputFormat::Json,
+                ..
+            }
+        )
     }
 }
 
@@ -225,6 +248,8 @@ struct JsonSummary {
 struct JsonReport {
     summary: JsonSummary,
     results: Vec<JsonResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 impl JsonReport {
@@ -235,6 +260,14 @@ impl JsonReport {
                 ..JsonSummary::default()
             },
             results: Vec::new(),
+            error: None,
+        }
+    }
+
+    fn error(error: String) -> Self {
+        Self {
+            error: Some(error),
+            ..Self::new(0)
         }
     }
 
@@ -247,13 +280,27 @@ impl JsonReport {
                 .or_default()
                 .entry(finding.severity)
                 .or_default() += 1;
-            match finding.severity {
-                Level::Error => self.summary.errors += 1,
-                Level::Warn => self.summary.warnings += 1,
-                Level::Ignore => {}
-            }
         }
+        self.summary.errors = self.summary.count_serialized_severity("error");
+        self.summary.warnings = self.summary.count_serialized_severity("warn");
         self.results.push(result);
+    }
+}
+
+impl JsonSummary {
+    fn count_serialized_severity(&self, wanted: &str) -> usize {
+        self.findings
+            .values()
+            .flat_map(BTreeMap::iter)
+            .filter(|(severity, _)| {
+                serde_json::to_value(severity)
+                    .ok()
+                    .and_then(|value| value.as_str().map(str::to_owned))
+                    .as_deref()
+                    == Some(wanted)
+            })
+            .map(|(_, count)| count)
+            .sum()
     }
 }
 
@@ -451,7 +498,12 @@ fn shown_path(path: &Path, root: &Path) -> String {
         .to_string()
 }
 
-fn finding_json(reported: &runner::Reported, tree: &Path, target: &Path) -> JsonFinding {
+fn finding_json(
+    reported: &runner::Reported,
+    tree: &Path,
+    target: &Path,
+    root: &Path,
+) -> JsonFinding {
     let (kind, message, tree_path, file, line) = match &reported.finding {
         Finding::Missing {
             path, spec_line, ..
@@ -468,21 +520,21 @@ fn finding_json(reported: &runner::Reported, tree: &Path, target: &Path) -> Json
             FindingKind::Extra,
             describe(&reported.finding, tree, target),
             Some(path.clone()),
-            target.display().to_string(),
+            shown_path(target, root),
             Some(*target_line),
         ),
         Finding::OutOfOrder { path } => (
             FindingKind::OutOfOrder,
             describe(&reported.finding, tree, target),
             Some(path.clone()),
-            target.display().to_string(),
+            shown_path(target, root),
             None,
         ),
         Finding::Unsupported { target_line } => (
             FindingKind::Unsupported,
             describe(&reported.finding, tree, target),
             None,
-            target.display().to_string(),
+            shown_path(target, root),
             Some(*target_line),
         ),
     };
@@ -534,7 +586,7 @@ fn add_json_outcome(report: &mut JsonReport, outcome: &runner::FileOutcome, root
             Some(shown_path(target, root)),
             findings
                 .iter()
-                .map(|finding| finding_json(finding, Path::new(&tree), target))
+                .map(|finding| finding_json(finding, Path::new(&tree), target, root))
                 .collect(),
             false,
         ),

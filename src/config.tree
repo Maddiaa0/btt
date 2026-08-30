@@ -1,6 +1,9 @@
 config discovery
-└── when finding the nearest config
-    ├── it finds a config beside the tree file
-    ├── it walks up to an ancestor within the root
-    ├── it stops at the invocation root
-    └── it returns none without any config
+├── when finding the nearest config
+│   ├── it finds a config beside the tree file
+│   ├── it walks up to an ancestor within the root
+│   ├── it stops at the invocation root
+│   └── it returns none without any config
+└── when resolving the governing root
+    ├── it uses the nearest config for a tree file
+    └── it falls back to the invocation root

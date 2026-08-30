@@ -80,6 +80,15 @@ pub fn nearest_config_dir(dir: &Path, root: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
+/// The directory whose `btt.toml` governs `tree_path`: the nearest config
+/// at or above it within `root`, or `root` itself when none exists.
+#[must_use]
+pub fn governing_root(tree_path: &Path, root: &Path) -> PathBuf {
+    let dir = tree_path.parent().unwrap_or(Path::new("."));
+    let dir = std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
+    nearest_config_dir(&dir, root).unwrap_or_else(|| root.to_path_buf())
+}
+
 /// Load `btt.toml` from the project root, or defaults if absent.
 ///
 /// # Errors
@@ -154,6 +163,27 @@ mod tests {
             let root = scratch("none");
             std::fs::create_dir_all(root.join("src")).unwrap();
             assert_eq!(nearest_config_dir(&root.join("src"), &root), None);
+        }
+    }
+
+    mod when_resolving_the_governing_root {
+        use super::*;
+
+        #[test]
+        fn uses_the_nearest_config_for_a_tree_file() {
+            let root = scratch("governs");
+            touch_config(&root.join("web"));
+            assert_eq!(
+                governing_root(&root.join("web/map.tree"), &root),
+                root.join("web")
+            );
+        }
+
+        #[test]
+        fn falls_back_to_the_invocation_root() {
+            let root = scratch("fallback");
+            std::fs::create_dir_all(root.join("src")).unwrap();
+            assert_eq!(governing_root(&root.join("src/map.tree"), &root), root);
         }
     }
 }

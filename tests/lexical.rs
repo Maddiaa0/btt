@@ -334,7 +334,7 @@ mod when_fuzzing_random_test_files {
                     let target = rng.pick(&["it", "test", "describe"]);
                     let _ = writeln!(
                         out,
-                        "{indent}function bind_{alias}() {{ const {alias} = {target}; {alias}(\"ignored\", () => {{}}); }}"
+                        "{indent}function bind_{alias}() {{ const {alias} = {target}; {alias}(\"ignored\", () => {{ it(\"inner\", () => {{}}); }}); }}"
                     );
                 }
                 6 => {
@@ -342,7 +342,7 @@ mod when_fuzzing_random_test_files {
                     let target = rng.pick(&["it", "test", "describe"]);
                     let _ = writeln!(
                         out,
-                        "{indent}for (const {alias} = {target}; false;) {{ {alias}(\"ignored\", () => {{}}); }}"
+                        "{indent}for (const {alias} = {target}; false;) {{ {alias}(\"ignored\", () => {{ it(\"inner\", () => {{}}); }}); }}"
                     );
                 }
                 _ => {
@@ -433,10 +433,10 @@ mod when_fuzzing_random_test_files {
 
     #[test]
     fn never_diverges_from_the_native_extraction() {
-        // 120 seeds keeps the richer files near the previous runtime; the cost is the native
+        // 60 seeds keeps the richer files near the previous runtime; the cost is the native
         // (per-extract query compilation), not the lexical scan.
         let (native_p, lexical_p) = (native_pack(), lexical_pack());
-        for seed in 0..120u64 {
+        for seed in 0..60u64 {
             let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
             let source = gen_file(&mut rng);
             let native =

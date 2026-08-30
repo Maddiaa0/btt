@@ -23,7 +23,7 @@ export default defineConfig({
         useStarlightDarkModeSwitch: false,
       },
       editLink: {
-        baseUrl: `${repositoryUrl}/edit/main/web/docs/`,
+        baseUrl: `${repositoryUrl}/edit/master/web/docs/`,
       },
       lastUpdated: true,
       pagination: true,

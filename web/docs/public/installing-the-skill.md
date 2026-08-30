@@ -29,7 +29,7 @@ Existing config and skill files are left alone. Commit the skill so it is availa
 
 The `--skill` flag currently writes a Claude skill. Codex reads repository instructions from `AGENTS.md`. Other agents have similar project files.
 
-Copy the **Branch tree testing (btt)** section from [`SNIPPET.md`](https://github.com/Maddiaa0/btt/blob/main/SNIPPET.md) into the right file for your agent:
+Copy the **Branch tree testing (btt)** section from [`SNIPPET.md`](https://github.com/Maddiaa0/btt/blob/master/SNIPPET.md) into the right file for your agent:
 
 | Agent | Put the instructions here |
 | --- | --- |
@@ -37,7 +37,7 @@ Copy the **Branch tree testing (btt)** section from [`SNIPPET.md`](https://githu
 | Codex | `AGENTS.md` |
 | Other agents | Their repository instruction file |
 
-[`AGENT-SETUP.md`](https://github.com/Maddiaa0/btt/blob/main/AGENT-SETUP.md) is different. It is a one-off prompt you paste into a chat when you want an agent to install btt and set up a project. Do not add that whole prompt to `AGENTS.md` or `CLAUDE.md`.
+[`AGENT-SETUP.md`](https://github.com/Maddiaa0/btt/blob/master/AGENT-SETUP.md) is different. It is a one-off prompt you paste into a chat when you want an agent to install btt and set up a project. Do not add that whole prompt to `AGENTS.md` or `CLAUDE.md`.
 
 ## Ask for the tree first
 

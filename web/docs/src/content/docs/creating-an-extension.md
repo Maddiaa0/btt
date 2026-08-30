@@ -45,10 +45,15 @@ btt tries packs in that order when more than one can handle the same tree.
 This example adds a small Mocha-style pack:
 
 ```toml title="pack.toml"
+format = 1
+
 [pack]
 name = "mocha-lexical"
 version = "0.1.0"
 description = "Mocha-style suites through lexical extraction"
+
+[compat]
+btt = ">=0.2.0"
 
 [detect]
 targets = ["{stem}.spec.mjs"]
@@ -166,4 +171,4 @@ Before sharing a pack, test a matching scaffold, missing and extra tests, siblin
 Manifests are strict, and paths cannot escape the pack folder. WASM grammars run without WASI filesystem or network access, but they are still executable parser input. Review and pin them.
 :::
 
-The built-in [Rust pack](https://github.com/Maddiaa0/btt/tree/main/packs/rust), [TypeScript pack](https://github.com/Maddiaa0/btt/tree/main/packs/typescript), and [lexical TypeScript pack](https://github.com/Maddiaa0/btt/tree/main/packs-lexical/typescript) are useful examples.
+The built-in [Rust pack](https://github.com/Maddiaa0/btt/tree/master/packs/rust), [TypeScript pack](https://github.com/Maddiaa0/btt/tree/master/packs/typescript), and [lexical TypeScript pack](https://github.com/Maddiaa0/btt/tree/master/packs-lexical/typescript) are useful examples.

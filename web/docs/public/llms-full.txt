@@ -384,10 +384,15 @@ btt tries packs in that order when more than one can handle the same tree.
 This example adds a small Mocha-style pack:
 
 ```toml
+format = 1
+
 [pack]
 name = "mocha-lexical"
 version = "0.1.0"
 description = "Mocha-style suites through lexical extraction"
+
+[compat]
+btt = ">=0.2.0"
 
 [detect]
 targets = ["{stem}.spec.mjs"]
@@ -505,7 +510,7 @@ Before sharing a pack, test a matching scaffold, missing and extra tests, siblin
 >
 > Manifests are strict, and paths cannot escape the pack folder. WASM grammars run without WASI filesystem or network access, but they are still executable parser input. Review and pin them.
 
-The built-in [Rust pack](https://github.com/Maddiaa0/btt/tree/main/packs/rust), [TypeScript pack](https://github.com/Maddiaa0/btt/tree/main/packs/typescript), and [lexical TypeScript pack](https://github.com/Maddiaa0/btt/tree/main/packs-lexical/typescript) are useful examples.
+The built-in [Rust pack](https://github.com/Maddiaa0/btt/tree/master/packs/rust), [TypeScript pack](https://github.com/Maddiaa0/btt/tree/master/packs/typescript), and [lexical TypeScript pack](https://github.com/Maddiaa0/btt/tree/master/packs-lexical/typescript) are useful examples.
 
 Source page: https://docs.btt.maddiaa.com/creating-an-extension/
 
@@ -542,7 +547,7 @@ Existing config and skill files are left alone. Commit the skill so it is availa
 
 The `--skill` flag currently writes a Claude skill. Codex reads repository instructions from `AGENTS.md`. Other agents have similar project files.
 
-Copy the **Branch tree testing (btt)** section from [`SNIPPET.md`](https://github.com/Maddiaa0/btt/blob/main/SNIPPET.md) into the right file for your agent:
+Copy the **Branch tree testing (btt)** section from [`SNIPPET.md`](https://github.com/Maddiaa0/btt/blob/master/SNIPPET.md) into the right file for your agent:
 
 | Agent | Put the instructions here |
 | --- | --- |
@@ -550,7 +555,7 @@ Copy the **Branch tree testing (btt)** section from [`SNIPPET.md`](https://githu
 | Codex | `AGENTS.md` |
 | Other agents | Their repository instruction file |
 
-[`AGENT-SETUP.md`](https://github.com/Maddiaa0/btt/blob/main/AGENT-SETUP.md) is different. It is a one-off prompt you paste into a chat when you want an agent to install btt and set up a project. Do not add that whole prompt to `AGENTS.md` or `CLAUDE.md`.
+[`AGENT-SETUP.md`](https://github.com/Maddiaa0/btt/blob/master/AGENT-SETUP.md) is different. It is a one-off prompt you paste into a chat when you want an agent to install btt and set up a project. Do not add that whole prompt to `AGENTS.md` or `CLAUDE.md`.
 
 ## Ask for the tree first
 

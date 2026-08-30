@@ -1,15 +1,33 @@
 [package]
-name = "btt"
+name = "btt-cli"
 version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Branch tree testing for any language: check and scaffold test suites from bulloak-style .tree specs"
+authors = ["Maddiaa0"]
+documentation = "https://docs.rs/btt-cli"
+homepage = "https://github.com/Maddiaa0/btt"
 repository = "https://github.com/Maddiaa0/btt"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 keywords = ["testing", "bulloak", "btt", "tree-sitter", "scaffold"]
 categories = ["development-tools::testing", "command-line-utilities"]
+publish = ["crates-io"]
 exclude = ["/web"]
+
+[package.metadata.wix]
+upgrade-guid = "7718ED1E-CEE1-487D-8BAC-83CA122363EF"
+path-guid = "CA724D62-57DD-443A-9992-08FB3B860D20"
+license = false
+eula = false
+
+[lib]
+name = "btt"
+path = "src/lib.rs"
+
+[[bin]]
+name = "btt"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.104"
@@ -30,6 +48,11 @@ walkdir = "2.5.0"
 [profile.release]
 strip = true
 lto = true
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }

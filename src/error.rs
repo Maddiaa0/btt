@@ -130,7 +130,7 @@ pub enum Error {
     /// A pack requests a `wasm:` grammar but this binary was built without
     /// the `wasm` feature.
     #[error(
-        "pack `{pack}`: wasm grammars need a btt built with the `wasm` feature (cargo install btt --features wasm)"
+        "pack `{pack}`: wasm grammars need a btt built with the `wasm` feature (cargo install btt-cli --locked --features wasm)"
     )]
     WasmUnsupported {
         /// The pack requesting the grammar.

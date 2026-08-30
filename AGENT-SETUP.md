@@ -15,8 +15,9 @@ agent's instructions.
 Set up btt (branch tree testing — test suites specified as .tree files that
 test code is checked against) from this repo:
 
-1. Build and install the binary: run `cargo install --path .` in the repo
-   root. The binary lands in ~/.cargo/bin/btt; verify with `btt --help`.
+1. Install the binary using the current platform's command from the README.
+   If Rust is already available, `cargo install btt-cli --locked` is also
+   supported. Verify the installed command with `btt --help`.
 
 2. Initialize the project I want checked (ask me which repo if it isn't
    obvious): run `btt init --skill` at its root. This writes btt.toml and a

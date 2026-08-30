@@ -1,0 +1,30 @@
+name: Publish crate
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: The dist release plan
+        required: true
+        type: string
+    secrets:
+      CARGO_REGISTRY_TOKEN:
+        description: Token allowed to publish btt-cli on crates.io
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: ${{ !fromJSON(inputs.plan).announcement_is_prerelease }}
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Publish btt-cli
+        run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

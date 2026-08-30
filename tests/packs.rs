@@ -11,9 +11,7 @@ fn repo_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
 }
 
-fn todo_marker() -> String {
-    ["btt:", "todo"].concat()
-}
+const TODO_MARKER: &str = "btt:todo";
 
 fn check_source(pack_name: &str, source: &str, cfg: CheckConfig) -> Vec<runner::Reported> {
     let dir = repo_root()
@@ -231,7 +229,7 @@ mod when_scaffolding_from_a_tree {
         assert!(out.contains("mod when_the_key_is_present {"), "{out}");
         assert!(out.contains("fn returns_the_value()"), "{out}");
         assert!(out.contains("#[test]"), "{out}");
-        assert!(out.contains(&todo_marker()), "{out}");
+        assert!(out.contains(TODO_MARKER), "{out}");
     }
 
     #[test]
@@ -244,7 +242,7 @@ mod when_scaffolding_from_a_tree {
             "{out}"
         );
         assert!(out.contains(r#"it("returns none", () => {"#), "{out}");
-        assert!(out.contains(&todo_marker()), "{out}");
+        assert!(out.contains(TODO_MARKER), "{out}");
     }
 }
 
@@ -252,7 +250,7 @@ mod when_checking_scaffold_markers {
     use super::*;
 
     fn two_tests() -> String {
-        let marker = todo_marker();
+        let marker = TODO_MARKER;
         format!(
             "describe(\"Map\", () => {{\n  it(\"works\", () => {{\n    // {marker}\n  }});\n}});\n"
         )
@@ -275,15 +273,22 @@ mod when_checking_scaffold_markers {
 
     #[test]
     fn clears_a_finding_when_its_marker_is_removed() {
-        let source = two_tests().replace(&todo_marker(), "body filled");
+        let source = two_tests().replace(TODO_MARKER, "body filled");
+        assert!(check_source("typescript", &source, CheckConfig::default()).is_empty());
+    }
+
+    #[test]
+    fn ignores_the_marker_inside_a_string_literal() {
+        let source = format!(
+            "describe(\"Map\", () => {{ it(\"works\", () => {{ expect(\"{TODO_MARKER}\").toBeTruthy(); }}); }});\n"
+        );
         assert!(check_source("typescript", &source, CheckConfig::default()).is_empty());
     }
 
     #[test]
     fn reports_a_marker_outside_a_test_span() {
         let source = format!(
-            "// {}\ndescribe(\"Map\", () => {{ it(\"works\", () => {{}}); }});\n",
-            todo_marker()
+            "// {TODO_MARKER}\ndescribe(\"Map\", () => {{ it(\"works\", () => {{}}); }});\n"
         );
         let findings = check_source("typescript", &source, CheckConfig::default());
         assert!(matches!(

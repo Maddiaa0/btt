@@ -312,18 +312,45 @@ pub fn check_file(
 fn todo_findings(source: &str, test_spans: &[extract::TestSpan]) -> Vec<Finding> {
     const MARKER: &str = "btt:todo";
     source
-        .match_indices(MARKER)
-        .map(|(at, _)| {
+        .split_inclusive('\n')
+        .enumerate()
+        .scan(0, |line_start, (line, text)| {
+            let at = comment_marker_offset(text, MARKER).map(|offset| *line_start + offset);
+            *line_start += text.len();
+            Some(at.map(|at| (line + 1, at)))
+        })
+        .flatten()
+        .map(|(target_line, at)| {
             let test_line = test_spans
                 .iter()
                 .find(|span| span.start <= at && at < span.end)
                 .map(|span| span.line);
             Finding::Todo {
-                target_line: source[..at].bytes().filter(|byte| *byte == b'\n').count() + 1,
+                target_line,
                 test_line,
             }
         })
         .collect()
+}
+
+fn comment_marker_offset(line: &str, marker: &str) -> Option<usize> {
+    let content = line.trim_start();
+    let indent = line.len() - content.len();
+    let leader = ["//", "#", "--", ";"]
+        .into_iter()
+        .find(|leader| content.starts_with(leader))?;
+    let after_leader = &content[leader.len()..];
+    let after_space = after_leader.trim_start();
+    let spacing = after_leader.len() - after_space.len();
+    let after_marker = after_space.strip_prefix(marker)?;
+    if after_marker
+        .chars()
+        .next()
+        .is_some_and(|next| next.is_alphanumeric() || next == '_')
+    {
+        return None;
+    }
+    Some(indent + leader.len() + spacing)
 }
 
 /// What happened when one tree file was checked.

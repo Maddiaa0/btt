@@ -718,9 +718,9 @@ mod when_a_scaffolded_file_is_checked_lexically {
 
     #[test]
     fn reports_todo_markers_identically_to_the_native_backend() {
-        let marker = ["btt:", "todo"].concat();
+        let marker = "btt:todo";
         let source = format!(
-            "describe(\"HashMap\", () => {{\n  it(\"returns none\", () => {{ // {marker}\n  }});\n}});\n"
+            "describe(\"HashMap\", () => {{\n  it(\"returns none\", () => {{\n    // {marker}\n  }});\n}});\n"
         );
         let dir = repo_root().join("target/lexical-fixtures/todo-parity");
         let _ = std::fs::remove_dir_all(&dir);
@@ -742,6 +742,31 @@ mod when_a_scaffolded_file_is_checked_lexically {
         };
         assert_eq!(lines(&native_pack()), lines(&lexical_pack()));
         assert_eq!(lines(&native_pack()).len(), 1);
+    }
+
+    #[test]
+    fn ignores_string_literal_markers_identically_to_the_native_backend() {
+        let source = r#"describe("HashMap", () => {
+  it("returns none", () => { expect("btt:todo").toBeTruthy(); });
+});
+"#;
+        let dir = repo_root().join("target/lexical-fixtures/todo-string-parity");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let tree_path = dir.join("map.tree");
+        let target = dir.join("map.test.ts");
+        std::fs::write(&tree_path, "HashMap\n└── it returns none\n").unwrap();
+        std::fs::write(&target, source).unwrap();
+
+        let count = |pack: &Pack| {
+            runner::check_file(pack, &tree_path, &target, &CheckConfig::default())
+                .unwrap()
+                .into_iter()
+                .filter(|reported| matches!(reported.finding, Finding::Todo { .. }))
+                .count()
+        };
+        assert_eq!(count(&native_pack()), count(&lexical_pack()));
+        assert_eq!(count(&native_pack()), 0);
     }
 }
 

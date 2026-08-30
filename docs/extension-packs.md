@@ -229,7 +229,7 @@ hidden. Missing expected nodes are always errors.
 | `order` | `"warn"` | sibling order differs between source and tree |
 | `uncovered` | `"warn"` | a test-bearing source file has no tree spec |
 | `unsupported` | `"error"` | extraction recognizes a construct that cannot be represented, such as `test.each` |
-| `todo` | `"warn"` | the exact scaffold marker `btt:todo` remains in a routed source file |
+| `todo` | `"warn"` | a line-start comment contains the exact scaffold marker `btt:todo` immediately after its comment leader and optional whitespace |
 
 `test_requires_marker` is for conventions where the test-defining syntax
 is ambiguous on its own: in Rust *any* `fn` matches the query, and only
@@ -403,12 +403,17 @@ Missing any required capture fails with `query must define @block,
 
 ## 6. The scaffold template
 
-Every generated test body should contain a comment with the exact marker
-`btt:todo`. `btt check` scans extracted test spans for this language-agnostic
-contract and reports the marker's source line until the body is filled and the
-marker removed. A marker outside every extracted test span is still reported
-as a file-level finding. Fresh scaffolds therefore warn by default; projects
-can set `todo = "error"` under `[check]` once unfinished bodies must fail CI.
+Every generated test body should contain a line whose trimmed content starts
+with a supported line-comment leader (`//`, `#`, `--`, or `;`), optional
+whitespace, and the exact marker `btt:todo`. `btt check` reports that line until
+the body is filled and the marker removed; occurrences in string literals or
+later in a prose comment are ignored. A marker comment outside every extracted
+test span is still reported as a file-level finding. A line-start comment that
+quotes the marker intentionally still triggers; split the string or reword the
+comment when testing or discussing the contract in source. Commented-out
+scaffolds also remain findings. Fresh scaffolds therefore warn by default;
+projects can set `todo = "error"` under `[check]` once unfinished bodies must
+fail CI.
 
 `btt scaffold` flattens the expected tree into a linear event stream so
 templates stay simple loops instead of recursive macros

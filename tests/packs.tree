@@ -18,6 +18,7 @@ language packs
 ├── when checking scaffold markers
 │   ├── it reports each marker at its source line with the default severity
 │   ├── it clears a finding when its marker is removed
+│   ├── it ignores the marker inside a string literal
 │   └── it reports a marker outside a test span
 ├── when scaffolding hostile spec text
 │   └── it escapes quotes and format braces

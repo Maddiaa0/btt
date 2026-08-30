@@ -157,8 +157,7 @@ fn subtree_roots(search: &[PathBuf], tree_files: &[PathBuf], root: &Path) -> Res
         let config_start = std::path::absolute(config_start)
             .with_context(|| format!("resolving {}", config_start.display()))?;
         roots.insert(
-            config::nearest_config_dir(&config_start, root)
-                .unwrap_or_else(|| root.to_path_buf()),
+            config::nearest_config_dir(&config_start, root).unwrap_or_else(|| root.to_path_buf()),
         );
 
         let walker = walkdir::WalkDir::new(path)

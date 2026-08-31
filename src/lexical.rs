@@ -12,9 +12,9 @@
 //!    whose keyword is not real code or whose title is not in the state
 //!    `name_syntax` promises (a string literal for `js-string`, plain
 //!    code for `raw` identifiers);
-//! 3. derives each match's span from the first bracket the match itself
-//!    contains (`it(` → the call's parens; `mod foo {` → the body), and
-//!    nesting from span containment — the same structural rule the
+//! 3. derives each match's span from its explicit `(?<span>...)` bracket
+//!    capture (`it(` → the call's paren; `mod foo {` → the body brace),
+//!    and nesting from span containment — the same structural rule the
 //!    tree-sitter path uses (shared `Capture`/`build_nodes`).
 //!
 //! ## Scope, honestly
@@ -26,15 +26,14 @@
 //! Syntax the profile cannot see is out of scope by design: JS regex
 //! literals and template interpolation, Python's indentation nesting,
 //! Ruby's `do … end`, attribute markers (`#[test]`). Those need either
-//! future profile tiers or a real grammar (`wasm:`). The contract that
-//! makes the tradeoff safe is failing closed: malformed profiles fail at
-//! pack load, and files the scan cannot fully account for (unbalanced
-//! brackets, unterminated strings or comments) are tool errors, never
-//! silent partial extractions. `tests/lexical.rs` differentially fuzzes
-//! the typescript profile against the native grammar.
-//! TypeScript aliases are intentionally limited to statement-start module
-//! `const`/`let`/`var` declarations, optionally prefixed by `export`. This
-//! shared conservative boundary excludes loop headers and block-local bindings.
+//! future profile tiers or a real grammar (`wasm:`). Within modeled syntax,
+//! malformed profiles fail at pack load and unbalanced brackets or
+//! unterminated strings/comments are tool errors rather than partial
+//! extractions. Out-of-scope syntax may still diverge silently; the
+//! TypeScript tests pin both supported equivalence and a known regex-literal
+//! divergence. TypeScript aliases are intentionally limited to
+//! statement-start module `const`/`let`/`var` declarations, optionally
+//! prefixed by `export`; this excludes loop headers and block-local bindings.
 
 use crate::error::{Error, Result};
 use crate::extract::{
@@ -81,7 +80,7 @@ pub(crate) fn validate_profile(cfg: &Lexical) -> std::result::Result<(), String>
     for (which, opener) in [("block", &cfg.block), ("test", &cfg.test)] {
         let re = compiled(&AliasSet::default().substitute(&opener.open))
             .map_err(|e| format!("[lexical.{which}] {e}"))?;
-        for group in ["kw", "name"] {
+        for group in ["kw", "name", "span"] {
             if !re.capture_names().any(|n| n == Some(group)) {
                 return Err(format!(
                     "[lexical.{which}] open must define a (?<{group}>...) group"
@@ -335,15 +334,21 @@ fn mask(source: &[u8], cfg: &Lexical) -> std::result::Result<Vec<State>, (usize,
     Ok(states)
 }
 
-/// A copy of the source with comment bytes blanked to spaces, byte
-/// offsets unchanged. Opener regexes match against this, so comment
-/// trivia between tokens behaves as the whitespace the language says it
-/// is, while the state mask still knows what was really a comment.
+/// A copy of the source with non-line-ending comment bytes blanked to
+/// spaces, byte offsets unchanged. Opener regexes match against this, so
+/// comment trivia behaves as whitespace while multiline anchors retain
+/// the line structure the language assigns to block comments.
 fn blank_comments(source: &str, states: &[State]) -> String {
     let bytes: Vec<u8> = source
         .bytes()
         .zip(states)
-        .map(|(b, s)| if *s == State::Comment { b' ' } else { b })
+        .map(|(b, s)| {
+            if *s == State::Comment && !matches!(b, b'\r' | b'\n') {
+                b' '
+            } else {
+                b
+            }
+        })
         .collect();
     // Comment regions start and end at (single-byte-aligned) delimiter
     // boundaries, so whole characters are always blanked together.
@@ -406,7 +411,7 @@ fn collect(
             .position(|n| n == Some(want))
             .ok_or_else(|| format!("opener pattern must define a (?<{want}>...) group"))
     };
-    let (kw_i, name_i) = (group("kw")?, group("name")?);
+    let (kw_i, name_i, span_i) = (group("kw")?, group("name")?, group("span")?);
     let syntax = pack.manifest.extract.name_syntax;
     let name_state = match syntax {
         NameSyntax::JsString => State::Str,
@@ -427,24 +432,36 @@ fn collect(
         let Some((name_start, name_end)) = locs.get(name_i) else {
             return Err("(?<name>...) did not participate in a match".to_string());
         };
+        let Some((span_start, span_end)) = locs.get(span_i) else {
+            return Err("(?<span>...) did not participate in a match".to_string());
+        };
         if states.get(kw_start) != Some(&State::Code) || states.get(name_start) != Some(&name_state)
         {
             at = m.start() + 1;
             continue;
         }
-        // The span runs to the matching closer of the first bracket the
-        // match itself contains: the call's parens for `it("x", ...)`,
-        // the body brace for `mod foo {` — so the pattern must include
-        // the definition's opening bracket.
-        let open_pos = (kw_start..m.end().min(states.len()))
-            .find(|&i| states[i] == State::Code && pairs.iter().any(|(open, _)| *open == bytes[i]))
-            .ok_or_else(|| {
-                format!(
-                    "opener at line {} contains no span bracket (the pattern must include the definition's opening bracket)",
-                    line_of(source, kw_start)
-                )
-            })?;
-        let end = brackets[&open_pos] + 1;
+        if span_end.checked_sub(span_start) != Some(1) {
+            return Err(format!(
+                "(?<span>...) at line {} must capture exactly one byte",
+                line_of(source, span_start)
+            ));
+        }
+        let span_byte = bytes
+            .get(span_start)
+            .copied()
+            .filter(|open| pairs.iter().any(|(candidate, _)| candidate == open));
+        if states.get(span_start) != Some(&State::Code) || span_byte.is_none() {
+            return Err(format!(
+                "(?<span>...) at line {} must capture one configured opening bracket in code",
+                line_of(source, span_start)
+            ));
+        }
+        let end = brackets.get(&span_start).copied().ok_or_else(|| {
+            format!(
+                "(?<span>...) at line {} has no matching closer",
+                line_of(source, span_start)
+            )
+        })? + 1;
         out.push(Capture {
             kind,
             name: decode_name(syntax, &source[name_start..name_end]),

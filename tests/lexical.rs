@@ -1,8 +1,8 @@
-//! The lexical backend's contract is equivalence: for realistic test
-//! files, extraction through the blob-free lexical profile must produce
-//! exactly what the native tree-sitter grammar produces. A curated corpus
-//! pins the known shapes; a seeded differential fuzzer hunts for edge
-//! cases in the space of generated test files.
+//! Within the syntax a profile models, lexical extraction should agree
+//! with the native tree-sitter grammar. A curated corpus pins the supported
+//! shapes; a seeded differential fuzzer hunts for edge cases in that space.
+//! Known divergence outside the profile is pinned separately so the
+//! heuristic fidelity boundary remains visible rather than aspirational.
 
 use btt::check;
 use btt::check::Finding;
@@ -640,8 +640,9 @@ mod when_a_raw_name_profile_extracts_declarations {
 
     // `name_syntax = "raw"` covers declaration-pattern tests: the name is
     // a code identifier, not a string literal, and the span bracket (the
-    // parameter list or body brace) follows the name. This is the shape
-    // Solidity/Foundry, Go, and pytest conventions take.
+    // parameter list or body brace) follows the name. An explicit `span`
+    // capture chooses which bracket owns the definition even when an
+    // earlier bracket occurs in the same opener.
     const SOLIDITY_MANIFEST: &str = r#"
 format = 1
 
@@ -667,10 +668,10 @@ strings = [{ delim = '"', escape = '\' }]
 nest = [["(", ")"], ["{", "}"]]
 
 [lexical.block]
-open = '''(?:^|[^\w$])(?<kw>contract)\s+(?<name>\w+)[^{]*\{'''
+open = '''(?m)^\s*(?<kw>contract)\s+(?<name>\w+)[^{]*(?<span>\{)'''
 
 [lexical.test]
-open = '''(?:^|[^\w$])(?<kw>function)\s+(?<name>test\w*)\s*\('''
+open = '''(?m)^\s*(?<kw>function)\s+(?<name>test\w*)\s*(?<span>\()'''
 
 [scaffold]
 template = "templates/test.jinja"
@@ -678,11 +679,11 @@ output = "{stem}.t.sol"
 "#;
 
     #[test]
-    fn nests_tests_by_bracket_spans() {
+    fn nests_tests_by_explicit_bracket_spans() {
         let p = super::fixture_pack("solidity", SOLIDITY_MANIFEST).unwrap();
         let source = r#"
 // SPDX-License-Identifier: MIT
-contract MapTest is Test {
+contract MapTest is Test(1) {
     function setUp() public {}
     function test_present() public {
         assert(lookup("key") != 0);
@@ -695,6 +696,38 @@ contract MapTest is Test {
         assert_eq!(actual[0].name, "MapTest");
         let tests: Vec<&str> = actual[0].children.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(tests, ["test_present", "test_absent"], "{actual:#?}");
+    }
+
+    #[test]
+    fn preserves_line_breaks_while_blanking_comments() {
+        let p = super::fixture_pack("solidity-comment-newline", SOLIDITY_MANIFEST).unwrap();
+        let source = r"pragma solidity ^0.8.0; /* heading
+*/contract MapTest {
+    function test_present() public {}
+}
+";
+        let actual = extract::extract(&p, Path::new("map.t.sol"), source).unwrap();
+        assert_eq!(actual.len(), 1, "{actual:#?}");
+        assert_eq!(actual[0].name, "MapTest");
+        assert_eq!(actual[0].children[0].name, "test_present");
+    }
+}
+
+mod when_source_uses_syntax_outside_the_profile {
+    use super::*;
+
+    // Regex literals are intentionally outside the TypeScript profile.
+    // Balanced delimiters can therefore look like real code instead of
+    // tripping fail-closed delimiter checks. Pin this as a known heuristic
+    // divergence so docs cannot imply unsupported syntax is always loud.
+    #[test]
+    fn documents_possible_silent_divergence() {
+        let source = r#"const matcher = /it("fake")/;"#;
+        let native = extract::extract(&native_pack(), Path::new("map.test.ts"), source).unwrap();
+        let lexical = extract::extract(&lexical_pack(), Path::new("map.test.ts"), source).unwrap();
+        assert!(native.is_empty(), "{native:#?}");
+        assert_eq!(lexical.len(), 1, "{lexical:#?}");
+        assert_eq!(lexical[0].name, "fake");
     }
 }
 
@@ -820,6 +853,7 @@ mod when_a_lexical_profile_is_malformed {
                 r#"nest = [["((", "))"]]"#,
             ),
             ("missing name group", "(?<name>", "(?<title>"),
+            ("missing span group", "(?<span>", "(?<scope>"),
             ("invalid regex", "(?<kw>", "(?<kw>["),
         ] {
             let mutated = base.replace(from, to);

@@ -7,8 +7,10 @@
   },
   "scripts": {
     "build": "pnpm --filter @btt/landing build",
-    "check": "pnpm --filter @btt/landing check",
+    "check": "pnpm --filter @btt/landing check && pnpm --filter @btt/docs check",
+    "build:docs": "pnpm --filter @btt/docs build",
     "dev": "pnpm --filter @btt/landing dev",
+    "dev:docs": "pnpm --filter @btt/docs dev",
     "start": "pnpm --filter @btt/landing start"
   }
 }

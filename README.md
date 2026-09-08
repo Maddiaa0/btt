@@ -264,7 +264,9 @@ With this pack active, a `map.tree` rooted at `MapTest` with the leaf
 "it returns the value" checks against
 `contract MapTest { function test_ReturnsTheValue() ... }` in
 `map.t.sol`. The in-repo packs are the reference examples:
-`packs-lexical/rust` and `packs-lexical/typescript` (lexical),
+`packs-lexical/rust` and `packs-lexical/typescript` (lexical twins of the
+builtins), `packs-lexical/swift` and `packs-lexical/xctest` (Swift Testing
+and XCTest — languages with no grammar in the binary at all),
 `packs-wasm/` (WASM), `packs/` (builtin).
 
 ## Limitations

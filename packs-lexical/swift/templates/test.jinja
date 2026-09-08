@@ -1,0 +1,17 @@
+import Testing
+// @testable import YourModule
+
+{% for ev in events -%}
+{% if ev.kind == "open" -%}
+{{ ev.indent }}struct {{ ev.name }} {
+{% elif ev.kind == "close" -%}
+{{ ev.indent }}}
+
+{% elif ev.kind == "test" -%}
+{{ ev.indent }}@Test func {{ ev.name }}() {
+{{ ev.indent }}    // TODO: {{ ev.text | line_safe }}
+{{ ev.indent }}    Issue.record("unimplemented")
+{{ ev.indent }}}
+
+{% endif -%}
+{% endfor -%}

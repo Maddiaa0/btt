@@ -266,7 +266,7 @@ With this pack active, a `map.tree` rooted at `MapTest` with the leaf
 `map.t.sol`. The in-repo packs are the reference examples:
 `packs-lexical/rust` and `packs-lexical/typescript` (lexical twins of the
 builtins), `packs-lexical/swift` and `packs-lexical/xctest` (Swift Testing
-and XCTest — languages with no grammar in the binary at all),
+and `XCTest` — languages with no grammar in the binary at all),
 `packs-wasm/` (WASM), `packs/` (builtin).
 
 ## Limitations

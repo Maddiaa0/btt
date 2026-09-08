@@ -166,7 +166,7 @@ mod when_fuzzing_random_test_files {
 
     /// Comment trivia legally allowed between an opener's tokens.
     fn trivia(rng: &mut Rng) -> &'static str {
-        rng.pick(&["", "", "", "/* trivia */"])
+        rng.pick::<&str>(&["", "", "", "/* trivia */"])
     }
 
     fn gen_items(rng: &mut Rng, depth: usize, out: &mut String) {

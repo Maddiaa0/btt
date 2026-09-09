@@ -1,0 +1,64 @@
+# XCTest via lexical scanning: no grammar — the [lexical] profile below
+# is the entire language definition. The test-case class is the root
+# block and `func testX()` methods are the tests. Validated by
+# tests/lexical.rs.
+#
+# XCTest has no nesting idiom: keep trees flat (root + `it` leaves).
+# Branches scaffold as nested `XCTestCase` classes, which is legal Swift
+# but not a convention runners promise to discover. Swift Testing suites
+# (`@Test`) are not matched — use the swift pack. The same string
+# limits as the swift pack apply: interpolation containing a string
+# literal or an unbalanced bracket is not modeled and fails closed.
+
+format = 1
+
+[pack]
+name = "xctest"
+version = "0.1.0"
+description = "XCTest via lexical scanning (no grammar): XCTestCase classes as roots, test-prefixed methods for leaves"
+
+[compat]
+btt = ">=0.2.0"
+
+[detect]
+targets = ["{stem}Tests.swift", "{stem}UITests.swift", "{stem}Test.swift"]
+
+[grammar]
+source = "lexical"
+
+[extract]
+
+[lexical]
+line_comment = "//"
+block_comment = ["/*", "*/"]
+strings = [
+  { delim = '"""', escape = '\' },
+  { delim = '"', escape = '\' },
+]
+nest = [["(", ")"], ["{", "}"]]
+
+# Blocks: a type declaration; in practice `final class NameTests: XCTestCase {`.
+[lexical.block]
+open = '''(?:^|[^\w])(?<kw>struct|enum|class|actor)\s+(?<name>[A-Z_]\w*)[^{;(]*\{'''
+
+# Tests: XCTest discovers methods whose name starts with `test` and that
+# take no parameters. The parameter list's `(` is the span.
+[lexical.test]
+open = '''(?:^|[^\w])(?<kw>func)\s+(?<name>test\w*)\s*\(\s*\)'''
+
+[mapping]
+# The tree root must appear as a top-level test-case class.
+root = "block"
+
+[mapping.block]
+case = "pascal"
+
+[mapping.test]
+strip_prefix = "it "
+add_prefix = "test"
+case = "pascal"
+
+[scaffold]
+template = "templates/test.jinja"
+output = "{stem}Tests.swift"
+indent = "    "

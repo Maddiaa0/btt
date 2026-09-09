@@ -22,7 +22,11 @@ throughout this guide:
 - [`packs/typescript`](../packs/typescript) — grammar-backed, string-literal
   titles, block-rooted mapping
 - [`packs-lexical/`](../packs-lexical) — the same two languages defined
-  purely lexically, no grammar at all
+  purely lexically, no grammar at all, plus two languages the binary has no
+  grammar for: [`swift`](../packs-lexical/swift) (Swift Testing: nested
+  suite types, `@Test` funcs, camelCase identifiers) and
+  [`xctest`](../packs-lexical/xctest) (flat `XCTestCase` classes,
+  `test`-prefixed methods) — the shape a brand-new lexical pack takes
 - [`packs-wasm/`](../packs-wasm) — the same two languages via sandboxed
   WASM grammar modules
 

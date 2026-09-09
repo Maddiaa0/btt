@@ -1,0 +1,76 @@
+# Swift Testing (`import Testing`) via lexical scanning: no grammar — the
+# [lexical] profile below is the entire language definition. Suites are
+# types (`struct`/`enum`/`class`/`actor`, nested for branches), tests are
+# `@Test` functions. Validated by tests/lexical.rs.
+#
+# Known limits, honestly: string interpolation that itself contains a
+# string literal or an unbalanced bracket (`"\(dict["k"])"`) is not
+# modeled — the scan usually fails closed on the bracket imbalance, so
+# keep such expressions out of test files or hoist them into helpers.
+# Raw strings (#"..."#) are scanned as plain strings, nested block
+# comments are not modeled, and `extension` blocks are not suites (tests
+# in an extension surface at the wrong level). Backticked names
+# (`func \`default\`()`) are not matched. XCTest classes parse as blocks
+# but their `func testX()` methods are not `@Test` — use the xctest pack.
+
+format = 1
+
+[pack]
+name = "swift"
+version = "0.1.0"
+description = "Swift Testing via lexical scanning (no grammar): nested suite types for branches, @Test funcs for leaves"
+
+[compat]
+btt = ">=0.2.0"
+
+[detect]
+targets = ["{stem}Tests.swift", "{stem}Test.swift"]
+
+[grammar]
+source = "lexical"
+
+[extract]
+
+[lexical]
+line_comment = "//"
+block_comment = ["/*", "*/"]
+# Multi-line literals are tried first so an unescaped `"` inside one does
+# not end the string early.
+strings = [
+  { delim = '"""', escape = '\' },
+  { delim = '"', escape = '\' },
+]
+nest = [["(", ")"], ["{", "}"]]
+
+# Blocks: any type declaration `struct Name … {` (also enum/class/actor).
+# The name must start uppercase — which rules out the `class func` and
+# `class var` modifier forms — and nothing bracket-shaped may sit between
+# the name and the body brace, so the body brace is always the span.
+[lexical.block]
+open = '''(?:^|[^\w])(?<kw>struct|enum|class|actor)\s+(?<name>[A-Z_]\w*)[^{;(]*\{'''
+
+# Tests: the `@Test` macro (bare or with traits/arguments), then any
+# further attributes and modifiers — anything brace-free, with string
+# literals skipped whole — up to the `func`. `@Test` itself must be real
+# code, which is what makes `"@Test"` in a string inert, and it must be
+# followed by a non-word character so `@Testable` does not match. The
+# span bracket is the trait list's `(` when present, else the parameter
+# list's — both sit inside the enclosing suite, which is all nesting needs.
+[lexical.test]
+open = '''(?<kw>@Test)(?:[^\w{}"](?:[^{}"]|"(?:[^"\\]|\\.)*")*?)?[^\w{}"]func\s+(?<name>\w+)\s*(?:<(?:[^<>]|<[^<>]*>)*>)?\s*\('''
+
+[mapping]
+# The tree root must appear as a top-level suite type.
+root = "block"
+
+[mapping.block]
+case = "pascal"
+
+[mapping.test]
+strip_prefix = "it "
+case = "camel"
+
+[scaffold]
+template = "templates/test.jinja"
+output = "{stem}Tests.swift"
+indent = "    "

@@ -30,6 +30,30 @@ fn rust_lexical_pack() -> Pack {
     pack::load_dir(&repo_root().join("packs-lexical/rust")).unwrap()
 }
 
+fn swift_pack() -> Pack {
+    pack::load_dir(&repo_root().join("packs-lexical/swift")).unwrap()
+}
+
+fn xctest_pack() -> Pack {
+    pack::load_dir(&repo_root().join("packs-lexical/xctest")).unwrap()
+}
+
+/// Render extracted structure as an indented outline, one name per line,
+/// so a whole shape is one readable assertion.
+fn outline(nodes: &[extract::ActualNode]) -> String {
+    fn walk(nodes: &[extract::ActualNode], depth: usize, out: &mut String) {
+        for node in nodes {
+            out.push_str(&"  ".repeat(depth));
+            out.push_str(&node.name);
+            out.push('\n');
+            walk(&node.children, depth + 1, out);
+        }
+    }
+    let mut out = String::new();
+    walk(nodes, 0, &mut out);
+    out
+}
+
 /// Write a lexical pack fixture under `target/lexical-fixtures/<case>/`
 /// and load it.
 fn fixture_pack(case: &str, manifest: &str) -> btt::Result<Pack> {
@@ -166,7 +190,7 @@ mod when_fuzzing_random_test_files {
 
     /// Comment trivia legally allowed between an opener's tokens.
     fn trivia(rng: &mut Rng) -> &'static str {
-        rng.pick(&["", "", "", "/* trivia */"])
+        rng.pick::<&str>(&["", "", "", "/* trivia */"])
     }
 
     fn gen_items(rng: &mut Rng, depth: usize, out: &mut String) {
@@ -420,6 +444,172 @@ mod when_fuzzing_random_rust_files {
             assert_eq!(
                 native, lexical,
                 "seed {seed} diverged\n--- source ---\n{source}\n--- native ---\n{native:#?}\n--- lexical ---\n{lexical:#?}"
+            );
+        }
+    }
+}
+
+mod when_extracting_swift_testing_lexically {
+    use super::*;
+
+    // Swift Testing has no native twin to diff against, so the curated
+    // corpus pins the shapes the profile promises: suites nest by type
+    // declaration, and every `@Test` spelling — bare, with traits and
+    // arguments (including strings holding brackets), with further
+    // attributes and modifiers, async/throws, generic — is one test.
+    const SUITE: &str = r#"
+import Testing
+@testable import App
+
+/// Doc comments are blanked: @Test func decoyInDocComment() {}
+struct HashMapTests {
+    let fixture = "@Test func decoyInString() {"
+    static let doc = """
+        @Test
+        func decoyInMultilineString() {}
+        unbalanced ( and "inner quotes" are fine in here
+        """
+
+    @Test func returnsTheValue() {
+        #expect(lookup("key") == "value (default)")
+    }
+
+    struct WhenTheKeyIsPresent {
+        @Test("display name", arguments: [Item(name: "a)b"), Item(name: "{c}")])
+        func returnsEachValue(_ item: Item) {}
+
+        @Test @MainActor
+        func returnsItOnTheMainActor() async throws {}
+
+        struct WhenTheValueWasOverwritten {
+            @Test(.disabled("flaky (see #12)"), .tags(.slow))
+            private func returnsTheLatestValue<T: Sendable>(_: T.Type = Int.self) {}
+        }
+    }
+
+    enum WhenTheKeyIsAbsent {
+        @Test static func returnsNone() {}
+    }
+
+    struct Helpers {
+        func notATest() {}
+        @Testable func alsoNotATest() {}
+    }
+}
+"#;
+
+    #[test]
+    fn nests_tests_by_suite_type() {
+        let actual = extract::extract(&swift_pack(), Path::new("HashMapTests.swift"), SUITE)
+            .unwrap_or_else(|e| panic!("extraction failed: {e}"));
+        assert_eq!(
+            outline(&actual),
+            "\
+HashMapTests
+  returnsTheValue
+  WhenTheKeyIsPresent
+    returnsEachValue
+    returnsItOnTheMainActor
+    WhenTheValueWasOverwritten
+      returnsTheLatestValue
+  WhenTheKeyIsAbsent
+    returnsNone
+"
+        );
+    }
+
+    // An XCTest case class is a block like any other type, but its
+    // `test`-prefixed methods are not `@Test` functions — the swift pack
+    // must see no tests there, leaving the file to the xctest pack.
+    #[test]
+    fn ignores_decoys_and_xctest_methods() {
+        let source = r"
+import XCTest
+
+// @Test func commentedOut() {}
+/* @Test
+   func inBlockComment() {} */
+final class LegacyTests: XCTestCase {
+    class func make() -> LegacyTests { LegacyTests() }
+    func testSignsIn() {}
+}
+";
+        let actual = extract::extract(&swift_pack(), Path::new("LegacyTests.swift"), source)
+            .unwrap_or_else(|e| panic!("extraction failed: {e}"));
+        assert!(actual.is_empty(), "{actual:#?}");
+    }
+}
+
+mod when_extracting_xctest_lexically {
+    use super::*;
+
+    // XCTest discovers `test`-prefixed, parameterless methods on the case
+    // class; lifecycle hooks, helpers, and parameterized methods are not
+    // tests. The `@Test` suite is the swift pack's business.
+    #[test]
+    fn finds_parameterless_test_prefixed_methods() {
+        let source = r#"
+import XCTest
+
+final class LoginFlowUITests: XCTestCase {
+    override func setUpWithError() throws { continueAfterFailure = false }
+
+    func testSignsInWithAValidPassword() throws {
+        XCTAssertTrue(app.buttons["Sign in (beta)"].exists)
+    }
+
+    @MainActor
+    func testSignsOut() async {}
+
+    func testHelperWithArguments(_ step: String) {}
+    private func drive(_ step: String) {}
+    override func tearDown() {}
+}
+
+struct ModernTests {
+    @Test func notAnXCTest() {}
+}
+"#;
+        let actual = extract::extract(&xctest_pack(), Path::new("LoginFlowUITests.swift"), source)
+            .unwrap_or_else(|e| panic!("extraction failed: {e}"));
+        assert_eq!(
+            outline(&actual),
+            "\
+LoginFlowUITests
+  testSignsInWithAValidPassword
+  testSignsOut
+"
+        );
+    }
+}
+
+mod when_a_scaffolded_swift_file_is_checked {
+    use super::*;
+
+    // Scaffold → check must round-trip for both Swift packs, nesting
+    // included: the templates must emit exactly the names the mappings
+    // produce (camelCase leaves for Swift Testing, `test`-prefixed
+    // PascalCase for XCTest) and the profiles must extract them back.
+    #[test]
+    fn reports_no_findings_for_either_pack() {
+        let spec = "HashMapTests\n\
+            ├── when the key is present\n\
+            │   ├── it returns the value\n\
+            │   └── when the value was overwritten\n\
+            │       └── it returns the latest value\n\
+            └── when the key is absent\n\
+            \x20   └── it returns \"none\" \\ {ok}\u{2028}more\n";
+        let trees = tree::parse(spec).unwrap();
+        for p in [swift_pack(), xctest_pack()] {
+            let expected = check::expected_from_spec(&trees, &p.manifest.mapping);
+            let out = scaffold::render(&p, &expected, "HashMap", false).unwrap();
+            let actual = extract::extract(&p, Path::new("HashMapTests.swift"), &out).unwrap();
+            let actual = check::unwrap_wrappers(actual, &p.manifest.mapping.wrappers);
+            let findings = check::diff(&expected, &actual);
+            assert!(
+                findings.is_empty(),
+                "{}: {findings:?}\n---\n{out}",
+                p.name()
             );
         }
     }

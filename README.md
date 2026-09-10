@@ -85,13 +85,23 @@ $ btt check
 
 ## Install
 
-macOS and Linux:
+Recommended for macOS and Linux: install the prebuilt release with the
+generated installer. No Rust toolchain or compilation is required.
 
 ```console
 $ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/Maddiaa0/btt/releases/latest/download/btt-cli-installer.sh | sh
+$ btt --version
 ```
 
-Package managers:
+The installer selects your OS and architecture, installs to
+`$CARGO_HOME/bin` or `~/.cargo/bin`, and configures your shell's PATH.
+Restart your shell if `btt` is not found after installation.
+Prebuilt releases include WASM grammar support.
+
+See [installation options](docs/install.md) for a pinned version, a custom
+directory, updates, and CI setup.
+
+Alternative package-manager commands:
 
 ```console
 $ brew install Maddiaa0/tap/btt
@@ -101,7 +111,7 @@ $ cargo install btt-cli --locked
 
 The Cargo package is named `btt-cli` because `btt` was already taken on
 crates.io. Every installation method provides the same `btt` command.
-Prebuilt releases include WASM grammar support; source installs can opt in with
+Source installs compile locally and can opt in to WASM grammar support with
 `cargo install btt-cli --locked --features wasm`.
 
 ## Quickstart

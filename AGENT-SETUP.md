@@ -15,9 +15,13 @@ agent's instructions.
 Set up btt (branch tree testing — test suites specified as .tree files that
 test code is checked against) from this repo:
 
-1. Install the binary using the current platform's command from the README.
-   If Rust is already available, `cargo install btt-cli --locked` is also
-   supported. Verify the installed command with `btt --help`.
+1. On macOS or Linux, install the prebuilt binary using the recommended
+   release installer from the README. It includes WASM grammar support and
+   does not need a Rust toolchain. Follow any dependency-age policy in the
+   target project; use a pinned eligible release from docs/install.md when
+   required. Prefer the binary installer even if Rust is already available.
+   Use a source build only when requested or needed for an unsupported
+   platform. Verify the installed command with `btt --version` and `btt --help`.
 
 2. Initialize the project I want checked (ask me which repo if it isn't
    obvious): run `btt init --skill` at its root. This writes btt.toml and a

@@ -43,11 +43,28 @@ nest = [["(", ")"], ["{", "}"]]
 # same decoder the tree-sitter path uses. The trailing [,)] rejects
 # non-literal titles ("a" + x), which the native query's first-argument
 # anchor also rejects.
+#
+# The alias patterns mirror the native query's @block.alias / @test.alias
+# declarations (`const describeDb = flag ? describe : describe.skip`):
+# names they discover are substituted into the {{block_aliases}} /
+# {{test_aliases}} placeholders — including into the alias patterns
+# themselves, so aliases of aliases resolve. They approximate the native
+# shapes line-locally: the declaration keyword, name, `=`, and the
+# ternary's condition must share a line, and comments inside the aliased
+# expression are not tolerated.
 [lexical.block]
-open = '''(?:^|[^\w$.])(?<kw>(?:describe|suite)(?:\.\w+)?|(?:it|test)\.describe)\s*\(\s*(?<name>"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*[,)]'''
+open = '''(?:^|[^\w$.])(?<kw>(?:describe|suite|{{block_aliases}})(?:\.\w+)?|(?:it|test)\.describe)\s*\(\s*(?<name>"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*[,)]'''
+alias = [
+  '''(?:^|[^\w$.])(?:const|let|var)\s+(?<name>[A-Za-z_$][\w$]*)(?:\s*:[^=;\n]+)?\s*=\s*(?<src>(?:describe|suite|{{block_aliases}})(?:\s*\.\s*\w+)?|(?:it|test)\s*\.\s*describe)\s*[;,\n]''',
+  '''(?:^|[^\w$.])(?:const|let|var)\s+(?<name>[A-Za-z_$][\w$]*)(?:\s*:[^=;\n]+)?\s*=[^;?:{}\n]*\?\s*(?<src>(?:describe|suite|{{block_aliases}})(?:\s*\.\s*\w+)?)\s*:\s*(?:describe|suite|{{block_aliases}})(?:\s*\.\s*\w+)?\s*[;,\n]''',
+]
 
 [lexical.test]
-open = '''(?:^|[^\w$.])(?<kw>(?:it|test)(?:\.(?:only|skip|fails|todo|fixme|slow|concurrent|sequential))?)\s*\(\s*(?<name>"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*[,)]'''
+open = '''(?:^|[^\w$.])(?<kw>(?:it|test|{{test_aliases}})(?:\.(?:only|skip|fails|todo|fixme|slow|concurrent|sequential))?)\s*\(\s*(?<name>"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*[,)]'''
+alias = [
+  '''(?:^|[^\w$.])(?:const|let|var)\s+(?<name>[A-Za-z_$][\w$]*)(?:\s*:[^=;\n]+)?\s*=\s*(?<src>(?:it|test|{{test_aliases}})(?:\s*\.\s*(?:only|skip|fails|todo|fixme|slow|concurrent|sequential))?)\s*[;,\n]''',
+  '''(?:^|[^\w$.])(?:const|let|var)\s+(?<name>[A-Za-z_$][\w$]*)(?:\s*:[^=;\n]+)?\s*=[^;?:{}\n]*\?\s*(?<src>(?:it|test|{{test_aliases}})(?:\s*\.\s*(?:only|skip|fails|todo|fixme|slow|concurrent|sequential))?)\s*:\s*(?:it|test|{{test_aliases}})(?:\s*\.\s*(?:only|skip|fails|todo|fixme|slow|concurrent|sequential))?\s*[;,\n]''',
+]
 
 [mapping]
 # The tree root must appear as a top-level describe block.

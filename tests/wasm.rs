@@ -64,11 +64,12 @@ mod tests {
 const TS_SOURCE: &str = r#"
 import { describe, it } from "vitest";
 const helper = () => {};
+const describeDb = helper ? describe : describe.skip;
 describe("HashMap", () => {
   describe("when the key is present", () => {
     it("returns the value", () => {});
   });
-  describe("when the key is absent", () => {
+  describeDb("when the key is absent", () => {
     it.skip("returns none", () => {});
   });
 });

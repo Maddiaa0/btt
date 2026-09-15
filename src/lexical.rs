@@ -34,7 +34,7 @@
 //! the typescript profile against the native grammar.
 
 use crate::error::{Error, Result};
-use crate::extract::{ActualKind, ActualNode, Capture, build_nodes, decode_name};
+use crate::extract::{ActualKind, ActualNode, AliasSet, Capture, build_nodes, decode_name};
 use crate::pack::{Lexical, NameSyntax, Pack};
 use regex::Regex;
 use std::collections::HashMap;
@@ -73,13 +73,29 @@ pub(crate) fn validate_profile(cfg: &Lexical) -> std::result::Result<(), String>
         return Err("nest must declare at least one bracket pair".to_string());
     }
     bracket_pairs(cfg)?;
+    // Patterns may carry alias placeholders; they are always substituted
+    // before compilation, so validation compiles them the same way
+    // extraction will first see them: with empty alias sets.
+    let empty = AliasSet::default();
     for (which, opener) in [("block", &cfg.block), ("test", &cfg.test)] {
-        let re = compiled(&opener.open).map_err(|e| format!("[lexical.{which}] {e}"))?;
+        let re = compiled(&empty.substitute(&opener.open))
+            .map_err(|e| format!("[lexical.{which}] {e}"))?;
         for group in ["kw", "name"] {
             if !re.capture_names().any(|n| n == Some(group)) {
                 return Err(format!(
                     "[lexical.{which}] open must define a (?<{group}>...) group"
                 ));
+            }
+        }
+        for pattern in &opener.alias {
+            let re = compiled(&empty.substitute(pattern))
+                .map_err(|e| format!("[lexical.{which}] alias: {e}"))?;
+            for group in ["name", "src"] {
+                if !re.capture_names().any(|n| n == Some(group)) {
+                    return Err(format!(
+                        "[lexical.{which}] alias must define a (?<{group}>...) group"
+                    ));
+                }
             }
         }
     }
@@ -101,13 +117,44 @@ pub(crate) fn extract(pack: &Pack, cfg: &Lexical, source: &str) -> Result<Vec<Ac
         .map_err(|(pos, what)| err(located(pos, what)))?;
     let haystack = blank_comments(source, &states);
 
+    // Alias fixpoint mirroring the native backend: scan the profile's
+    // alias patterns, fold the discovered names into the placeholder
+    // substitution — including into the alias patterns themselves, so
+    // aliases of aliases resolve — and rescan until the sets stop
+    // growing. Profiles without alias patterns settle on the first pass.
+    let mut aliases = AliasSet::default();
+    loop {
+        let mut found: Vec<(ActualKind, String)> = Vec::new();
+        for (kind, opener) in [(ActualKind::Block, &cfg.block), (ActualKind::Test, &cfg.test)] {
+            for pattern in &opener.alias {
+                let names =
+                    collect_aliases(&aliases.substitute(pattern), &haystack, &states).map_err(err)?;
+                found.extend(names.into_iter().map(|n| (kind, n)));
+            }
+        }
+        let before = (aliases.blocks.len(), aliases.tests.len());
+        for (kind, name) in found {
+            aliases.insert(kind, &name);
+        }
+        if (aliases.blocks.len(), aliases.tests.len()) == before {
+            break;
+        }
+    }
+
     let mut captures: Vec<Capture> = Vec::new();
     for (kind, pattern) in [
         (ActualKind::Block, cfg.block.open.as_str()),
         (ActualKind::Test, cfg.test.open.as_str()),
     ] {
         collect(
-            kind, pattern, pack, source, &haystack, &states, &brackets, &pairs,
+            kind,
+            &aliases.substitute(pattern),
+            pack,
+            source,
+            &haystack,
+            &states,
+            &brackets,
+            &pairs,
         )
         .map(|found| captures.extend(found))
         .map_err(err)?;
@@ -317,6 +364,51 @@ fn collect(
             start: kw_start,
             end,
         });
+        at = m.end();
+    }
+    Ok(out)
+}
+
+/// Run one alias-declaration pattern over the comment-blanked source,
+/// returning the alias names whose `name` and `src` groups both land on
+/// real code. A rejected match (a decoy inside a string) resumes the
+/// search one byte past its start so it cannot shadow a real declaration
+/// it overlapped.
+fn collect_aliases(
+    pattern: &str,
+    haystack: &str,
+    states: &[State],
+) -> std::result::Result<Vec<String>, String> {
+    let re = compiled(pattern)?;
+    let group = |want: &str| {
+        re.capture_names()
+            .position(|n| n == Some(want))
+            .ok_or_else(|| format!("alias pattern must define a (?<{want}>...) group"))
+    };
+    let (name_i, src_i) = (group("name")?, group("src")?);
+
+    let mut out = Vec::new();
+    let mut locs = re.capture_locations();
+    let mut at = 0;
+    while at <= haystack.len() {
+        let Some(m) = re.captures_read_at(&mut locs, haystack, at) else {
+            break;
+        };
+        let Some((name_start, name_end)) = locs.get(name_i) else {
+            return Err("(?<name>...) did not participate in a match".to_string());
+        };
+        let Some((src_start, _)) = locs.get(src_i) else {
+            return Err("(?<src>...) did not participate in a match".to_string());
+        };
+        if states.get(name_start) != Some(&State::Code)
+            || states.get(src_start) != Some(&State::Code)
+        {
+            at = m.start() + 1;
+            continue;
+        }
+        // Code positions are never blanked, so the haystack text equals
+        // the source text here.
+        out.push(haystack[name_start..name_end].to_string());
         at = m.end();
     }
     Ok(out)

@@ -137,6 +137,15 @@ pub struct Opener {
     /// definition's opening bracket (the call's `(`, a body's `{`): its
     /// matching closer bounds the definition's span for nesting.
     pub open: String,
+    /// Alias-declaration patterns (a vitest
+    /// `const describeDb = flag ? describe : describe.skip`). Each must
+    /// define `(?<name>...)` on the alias identifier and `(?<src>...)` on
+    /// the aliased keyword; both must land on real code. Matched names are
+    /// substituted into the profile's `{{block_aliases}}` /
+    /// `{{test_aliases}}` placeholders — including in these patterns, so
+    /// aliases of aliases resolve — until the set stops growing.
+    #[serde(default)]
+    pub alias: Vec<String>,
 }
 
 /// The lexical profile of a `source = "lexical"` pack: just enough syntax
